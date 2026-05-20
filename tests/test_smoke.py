@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from castrum import __version__
-from castrum.audit.logger import AuditLogger
-from castrum.cli import main
-from castrum.graph import describe_graph
-from castrum.guardrails.egress_firewall import ALLOWED_HOSTS, is_allowed
-from castrum.state import ModernizationRequest, StudioState
+from phalanx import __version__
+from phalanx.audit.logger import AuditLogger
+from phalanx.cli import main
+from phalanx.graph import describe_graph
+from phalanx.guardrails.egress_firewall import ALLOWED_HOSTS, is_allowed
+from phalanx.state import ModernizationRequest, StudioState
 
 
 def test_version_is_set() -> None:

@@ -9,7 +9,7 @@ Implementation lands in a follow-up PR.
 
 from __future__ import annotations
 
-from castrum.state import Plan, UnifiedDiff
+from phalanx.state import Plan, UnifiedDiff
 
 
 def implement(plan: Plan) -> UnifiedDiff:

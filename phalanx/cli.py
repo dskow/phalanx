@@ -1,8 +1,8 @@
-"""Castrum command-line entry point.
+"""Phalanx command-line entry point.
 
 The scaffold version of this CLI exercises the Docker harness and
 the audit-log writer end-to-end without invoking any agent. Running
-``castrum run --target <dir> --out <dir>`` reads the modernization
+``phalanx run --target <dir> --out <dir>`` reads the modernization
 request from ``<target>/REQUEST.md``, records a scaffold event in
 the audit log, and exits 0. Real agent execution lands in
 subsequent PRs.
@@ -14,17 +14,17 @@ import argparse
 import sys
 from pathlib import Path
 
-from castrum import __version__
-from castrum.audit.logger import AuditLogger
-from castrum.state import ModernizationRequest
+from phalanx import __version__
+from phalanx.audit.logger import AuditLogger
+from phalanx.state import ModernizationRequest
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="castrum",
+        prog="phalanx",
         description="Autonomous code-modernization studio.",
     )
-    parser.add_argument("--version", action="version", version=f"castrum {__version__}")
+    parser.add_argument("--version", action="version", version=f"phalanx {__version__}")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -60,11 +60,11 @@ def _cmd_run(target: Path, out: Path) -> int:
     audit = AuditLogger(out / "audit.jsonl")
     audit.record_scaffold_event(
         node="cli",
-        message=f"scaffold run — agents not yet implemented (castrum {__version__})",
+        message=f"scaffold run — agents not yet implemented (phalanx {__version__})",
         request_title=request.title,
     )
 
-    print(f"castrum {__version__}: scaffold run complete")
+    print(f"phalanx {__version__}: scaffold run complete")
     print(f"  target:  {target}")
     print(f"  out:     {out}")
     print(f"  request: {request.title}")

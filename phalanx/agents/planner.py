@@ -10,7 +10,7 @@ Implementation lands in a follow-up PR. The signature is stable.
 
 from __future__ import annotations
 
-from castrum.state import ModernizationRequest, Plan
+from phalanx.state import ModernizationRequest, Plan
 
 
 def plan(request: ModernizationRequest) -> Plan:

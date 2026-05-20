@@ -1,4 +1,4 @@
-"""Tool gateway — the only module in Castrum that may invoke shell
+"""Tool gateway — the only module in Phalanx that may invoke shell
 or filesystem-writing operations.
 
 Every tool call from an agent passes through ``invoke``. The gateway

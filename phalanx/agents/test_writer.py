@@ -9,7 +9,7 @@ Implementation lands in a follow-up PR.
 
 from __future__ import annotations
 
-from castrum.state import TestArtifact, UnifiedDiff
+from phalanx.state import TestArtifact, UnifiedDiff
 
 
 def write_tests(diff: UnifiedDiff) -> TestArtifact:

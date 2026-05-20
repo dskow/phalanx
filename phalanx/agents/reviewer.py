@@ -10,7 +10,7 @@ Implementation lands in a follow-up PR.
 
 from __future__ import annotations
 
-from castrum.state import Plan, ReviewVerdict, TestArtifact, UnifiedDiff
+from phalanx.state import Plan, ReviewVerdict, TestArtifact, UnifiedDiff
 
 
 def review(plan: Plan, diff: UnifiedDiff, tests: TestArtifact) -> ReviewVerdict:

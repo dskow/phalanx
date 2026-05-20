@@ -1,6 +1,6 @@
 """Initial test coverage for the legacy app — intentionally sparse.
 
-The /search endpoint has no test. Castrum is expected to add one
+The /search endpoint has no test. Phalanx is expected to add one
 as part of the modernization run.
 """
 

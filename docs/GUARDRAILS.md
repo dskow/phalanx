@@ -8,7 +8,7 @@ The guardrail layer is the boundary between LLM-generated intent and side-effect
 
 ## The four guardrails
 
-### 1. Input filter — `castrum/guardrails/input_filter.py`
+### 1. Input filter — `phalanx/guardrails/input_filter.py`
 
 Scans every piece of repository content the agent is about to ingest for known prompt-injection patterns:
 
@@ -21,7 +21,7 @@ Hits do not halt the run. The filter strips the offending span, replaces it with
 
 The bundled target codebase contains a planted injection in `target/app.py`'s `/users` docstring specifically to exercise this guardrail.
 
-### 2. Tool gateway — `castrum/guardrails/tool_gateway.py`
+### 2. Tool gateway — `phalanx/guardrails/tool_gateway.py`
 
 Agents do not call shell commands or filesystem APIs directly. Every tool invocation is intercepted by the gateway, which:
 
@@ -38,7 +38,7 @@ The agent container has no network egress except to the configured model endpoin
 
 The egress allowlist is declared in `docker-compose.yml` and is the smallest set of hosts the agent provably needs. Adding a host requires a code change, not a runtime config.
 
-### 4. Output validator — `castrum/guardrails/output_validator.py`
+### 4. Output validator — `phalanx/guardrails/output_validator.py`
 
 Every diff the implementer produces is applied to a scratch copy of the target and run through:
 
@@ -57,10 +57,10 @@ A failure at any of these is a hard stop. The implementer is re-invoked with the
 
 ## Threat model
 
-Castrum's guardrails are designed against three threats, ranked by likelihood:
+Phalanx's guardrails are designed against three threats, ranked by likelihood:
 
 1. **Prompt injection from the codebase under modernization.** The most common attack surface — a docstring, README, or comment in the target tree that tries to redirect the agent. Mitigated by the input filter.
 2. **Tool-use exfiltration.** An agent that has been redirected attempts to read secrets or call external APIs. Mitigated by the tool gateway (filesystem confinement) and the egress firewall (network confinement).
 3. **Hallucinated-but-plausible vulnerable code.** An agent confidently produces code that introduces a vulnerability the prompt did not ask for. Mitigated by the output validator's SAST pass.
 
-What is explicitly out of scope: a malicious operator who controls the orchestrator process itself. If you do not trust the host running Castrum, no in-process guardrail will save you.
+What is explicitly out of scope: a malicious operator who controls the orchestrator process itself. If you do not trust the host running Phalanx, no in-process guardrail will save you.

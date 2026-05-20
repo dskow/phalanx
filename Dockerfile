@@ -1,4 +1,4 @@
-# Castrum agent runtime.
+# Phalanx agent runtime.
 # Single image used for both the studio and the test harness.
 FROM python:3.12-slim AS base
 
@@ -18,16 +18,16 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
-COPY castrum ./castrum
+COPY phalanx ./phalanx
 COPY tests ./tests
 RUN pip install --no-cache-dir -e ".[dev]"
 
 # Non-root user. The orchestrator does not need root, and the
 # guardrails are easier to reason about when nothing in the
 # container can write to /etc or /usr.
-RUN useradd --create-home --shell /bin/bash castrum \
- && chown -R castrum:castrum /app
-USER castrum
+RUN useradd --create-home --shell /bin/bash phalanx \
+ && chown -R phalanx:phalanx /app
+USER phalanx
 
-ENTRYPOINT ["python", "-m", "castrum.cli"]
+ENTRYPOINT ["python", "-m", "phalanx.cli"]
 CMD ["--help"]

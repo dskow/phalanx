@@ -1,6 +1,6 @@
 """Studio state and agent I/O contracts.
 
-These models are the architectural backbone of Castrum: every agent
+These models are the architectural backbone of Phalanx: every agent
 declares its input and output by referencing a model here, and the
 orchestrator validates both directions at every state transition.
 A run that produces output failing validation halts immediately —
@@ -26,7 +26,7 @@ class Change(BaseModel):
 
 
 class ModernizationRequest(BaseModel):
-    """A refactor request — the input to a Castrum run."""
+    """A refactor request — the input to a Phalanx run."""
 
     title: str
     body: str

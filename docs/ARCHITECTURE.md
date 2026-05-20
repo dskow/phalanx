@@ -1,10 +1,10 @@
 # Architecture
 
-Castrum is a LangGraph state machine where each node is an agent constrained by a typed I/O contract. Side-effectful operations (file read, file write, command execution, network) route through a guardrail layer that is deterministic — i.e., not LLM-driven and not reachable from inside agent context.
+Phalanx is a LangGraph state machine where each node is an agent constrained by a typed I/O contract. Side-effectful operations (file read, file write, command execution, network) route through a guardrail layer that is deterministic — i.e., not LLM-driven and not reachable from inside agent context.
 
 ## State
 
-The full state object is defined in [`castrum/state.py`](../castrum/state.py) as `StudioState`. Conceptually:
+The full state object is defined in [`phalanx/state.py`](../phalanx/state.py) as `StudioState`. Conceptually:
 
 | Field | Type | Set by |
 |---|---|---|

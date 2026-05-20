@@ -6,7 +6,7 @@ Implementation lands in a follow-up PR.
 
 from __future__ import annotations
 
-from castrum.state import UnifiedDiff
+from phalanx.state import UnifiedDiff
 
 
 def validate(diff: UnifiedDiff) -> tuple[bool, list[str]]:

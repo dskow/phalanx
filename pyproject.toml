@@ -1,5 +1,5 @@
 [project]
-name = "castrum"
+name = "phalanx"
 version = "0.1.0"
 description = "Autonomous code-modernization studio with deterministic guardrails."
 readme = "README.md"
@@ -23,14 +23,14 @@ dev = [
 ]
 
 [project.scripts]
-castrum = "castrum.cli:main"
+phalanx = "phalanx.cli:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["castrum*"]
+include = ["phalanx*"]
 
 [tool.ruff]
 line-length = 100
@@ -39,12 +39,12 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
 # S603/S607 (subprocess) are intentionally allowed only in
-# castrum.guardrails.tool_gateway; we enforce that with a
+# phalanx.guardrails.tool_gateway; we enforce that with a
 # per-file ignore rather than a blanket allow.
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"castrum/guardrails/tool_gateway.py" = ["S603", "S607"]
+"phalanx/guardrails/tool_gateway.py" = ["S603", "S607"]
 "tests/**" = ["S101"]
 
 [tool.mypy]
