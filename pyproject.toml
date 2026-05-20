@@ -12,7 +12,7 @@ dependencies = [
     "langgraph>=1.2.0",
     "langchain-anthropic>=1.4.3",
     "anthropic>=0.103.1",
-    "pydantic>=2.7",
+    "pydantic>=2.13.4",
 ]
 
 [project.optional-dependencies]
