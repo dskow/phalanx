@@ -1,0 +1,4 @@
+# Pinned to a pre-Flask-3 release so the planted deprecation
+# is observable without crashing on import. The modernization
+# brief includes bumping this constraint.
+flask==2.2.5

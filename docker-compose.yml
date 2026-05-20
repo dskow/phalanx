@@ -1,0 +1,50 @@
+# Castrum services.
+#
+# castrum-run    — the studio against target/
+# castrum-test   — pytest against the agent codebase
+#
+# Egress is constrained by an explicit network configuration. The
+# agent container can reach api.anthropic.com and nothing else.
+# Adding a host means editing this file — it is a code change, not
+# a runtime knob.
+
+services:
+  castrum-run:
+    build: .
+    image: castrum:dev
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CASTRUM_MODEL: ${CASTRUM_MODEL:-claude-sonnet-4-6}
+      CASTRUM_AUDIT: ${CASTRUM_AUDIT:-standard}
+      CASTRUM_MAX_ITERATIONS: ${CASTRUM_MAX_ITERATIONS:-4}
+    volumes:
+      - ./target:/app/target:ro
+      - ./out:/app/out
+    networks:
+      - egress-restricted
+    command: ["run", "--target", "/app/target", "--out", "/app/out"]
+
+  castrum-test:
+    build: .
+    image: castrum:dev
+    volumes:
+      - ./castrum:/app/castrum:ro
+      - ./tests:/app/tests:ro
+    networks:
+      - none
+    entrypoint: ["pytest"]
+    command: ["-v", "tests/"]
+
+networks:
+  # Used by castrum-run. In a hardened deployment this would have
+  # an explicit destination allowlist enforced by an egress proxy
+  # (e.g. squid or a sidecar). For the demo we rely on Docker
+  # bridge defaults; the production posture is documented in
+  # docs/GUARDRAILS.md.
+  egress-restricted:
+    driver: bridge
+
+  # Used by castrum-test. No external network at all.
+  none:
+    driver: bridge
+    internal: true
