@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-flight runs for the same ref when a new commit lands.
+# Saves CI minutes without weakening the merge gate — the latest
+# commit is always the one that has to pass.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build image and run smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build phalanx image
+        run: docker compose build phalanx-test
+
+      - name: Run smoke tests
+        run: docker compose run --rm phalanx-test
+
+      - name: Prepare host-mounted output directory
+        # On Linux CI the workspace is owned by root, but the
+        # container runs as the non-root `phalanx` user. Without
+        # this step the end-to-end run fails on its first write to
+        # /app/out. Docker Desktop on macOS/Windows masks this.
+        run: mkdir -p out && chmod 777 out
+
+      - name: Run end-to-end scaffold demo against target/
+        # The scaffold CLI does not call the model, so this runs
+        # without ANTHROPIC_API_KEY and proves the harness wiring.
+        # Once agents land, this step will be gated on a model key
+        # and skipped on forks.
+        run: docker compose run --rm phalanx-run
+
+      - name: Verify audit log was written
+        run: |
+          test -s out/audit.jsonl
+          cat out/audit.jsonl

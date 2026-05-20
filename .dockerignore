@@ -1,0 +1,19 @@
+# Keep the build context lean: nothing under .git, .github, docs/,
+# out/, or local IDE state needs to ship into the image.
+.git
+.github
+.gitignore
+.dockerignore
+.env
+.env.local
+out/
+docs/
+*.md
+!README.md
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.vscode/
+.idea/

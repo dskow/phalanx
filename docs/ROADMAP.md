@@ -1,0 +1,61 @@
+# Roadmap
+
+A PR-by-PR build trace. Each entry corresponds to one open or merged PR. Every PR has a single architectural responsibility and lands with its own contract tests.
+
+## Closed
+
+- [x] **PR #1 — `chore: initial project scaffold`** — Docker harness, Pydantic state contracts, agent/guardrail stubs, target Flask demo app, smoke tests. ([#1](https://github.com/dskow/phalanx/pull/1))
+
+## Planned (in dependency order)
+
+Each item below maps to one PR that has not been opened yet. The order matters: every PR depends on the contract the previous one established.
+
+- [ ] **`feat(guardrails): input filter neutralizes prompt-injection patterns`**
+  - Closes the planted prompt-injection payload in `target/app.py`'s `/users` docstring.
+  - Pattern library covers instruction-override, role-override, and exfiltration phrasing.
+  - Contract test: the planted payload is stripped from filtered content; the surrounding docstring text survives.
+
+- [ ] **`feat(agents): planner produces Pydantic-validated Plan from REQUEST.md`**
+  - First real LLM call. Bound to the input filter — the planner only ever sees neutralized content.
+  - Contract test: a deliberately-malformed model response halts the run with a structured error, never silently coerces.
+
+- [ ] **`feat(guardrails): tool gateway with role-based allowlist and path sandbox`**
+  - Turns "agents do not import subprocess" from a doc claim into an enforced contract.
+  - Per-role tool allowlists; path-traversal rejection; shell metacharacter denial.
+  - Contract test: an attempted shell command containing `;` is rejected with a recorded audit event.
+
+- [ ] **`feat(agents): implementer produces unified diff via gateway-mediated writes`**
+  - Implementer agent uses only the tool gateway for file operations.
+  - Output is a `UnifiedDiff` applied to a scratch tree before being inspected.
+
+- [ ] **`feat(guardrails): output validator runs ruff/mypy/semgrep on every diff`**
+  - Hard stop on lint/type/SAST failures.
+  - Re-invokes the implementer with failure context up to `PHALANX_MAX_ITERATIONS`.
+
+- [ ] **`feat(agents): test writer adds coverage for the change`**
+  - Generates test diff, runs pytest in the no-network test container, captures the exit code.
+
+- [ ] **`feat(agents): reviewer evaluates against acceptance criteria, emits verdict`**
+  - Final agent. PASS verdict promotes the run to PR-ready state; FAIL halts and the audit log records the failing criterion.
+
+- [ ] **`feat(cli): emit pull-request payload (title, body, diff bundle) on PASS`**
+  - Closes the requirement-to-PR loop.
+  - The payload is JSON; how it becomes a real PR (gh CLI, GitHub API, GitLab) is left to the operator and intentionally out of scope.
+
+## What "done" looks like
+
+A clean `docker compose up phalanx-run` against `target/` produces:
+
+- A unified diff that fixes the three planted issues (Flask 3 migration, SQL injection, missing test).
+- A passing test file for `/search`.
+- A `semgrep --config=p/security-audit` report with the original SQL-injection finding cleared.
+- An audit log of the full run, including an input-filter hit on the planted prompt injection.
+- A PR payload ready to submit via `gh pr create`.
+
+Five minutes, one container, zero host dependencies.
+
+## How to follow along
+
+- Watch the [open PRs](https://github.com/dskow/phalanx/pulls) — each one closes the next item on the list.
+- The [closed PRs](https://github.com/dskow/phalanx/pulls?q=is%3Apr+is%3Aclosed) are the changelog. Every closed PR has a Summary and a Test Plan in its body.
+- The [CI badge](https://github.com/dskow/phalanx/actions) on the README tracks whether the harness still builds and tests still pass.
