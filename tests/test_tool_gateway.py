@@ -322,6 +322,103 @@ def test_run_shell_executable_not_on_allowlist_is_rejected(
     assert excinfo.value.code == "executable_denied"
 
 
+def test_run_shell_cwd_inside_out_root_is_used(
+    sandbox: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cwd under out_root is honored — verifies the implementer can
+    run git apply from a scratch directory."""
+    _, out = sandbox
+    (out / "scratch").mkdir()
+    captured: dict[str, Any] = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv: Any, **kwargs: Any) -> Any:
+        captured["cwd"] = kwargs["cwd"]
+        return FakeCompleted()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    gw = _gateway(sandbox)
+    gw.invoke(
+        "implementer",
+        "run_shell",
+        {"argv": ["git", "status"], "cwd": "scratch"},
+    )
+    assert captured["cwd"] == str((out / "scratch").resolve())
+
+
+def test_run_shell_cwd_outside_sandbox_is_rejected(
+    sandbox: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cwd that escapes out_root must be rejected before subprocess
+    is reached — same property as path_outside_sandbox for write_file."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: pytest.fail("subprocess must not run"),
+    )
+    gw = _gateway(sandbox)
+    with pytest.raises(ToolGatewayError) as excinfo:
+        gw.invoke(
+            "implementer",
+            "run_shell",
+            {"argv": ["git", "status"], "cwd": "../escape"},
+        )
+    assert excinfo.value.code == "path_outside_sandbox"
+
+
+def test_run_shell_cwd_must_exist(
+    sandbox: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cwd that resolves inside the sandbox but does not exist as a
+    directory is rejected — running a command in a non-existent dir
+    would silently misbehave."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: pytest.fail("subprocess must not run"),
+    )
+    gw = _gateway(sandbox)
+    with pytest.raises(ToolGatewayError) as excinfo:
+        gw.invoke(
+            "implementer",
+            "run_shell",
+            {"argv": ["git", "status"], "cwd": "not_there"},
+        )
+    assert excinfo.value.code == "cwd_invalid"
+
+
+def test_run_shell_default_cwd_is_target_root(
+    sandbox: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backwards-compatibility check: omitting cwd uses target_root."""
+    target, _ = sandbox
+    captured: dict[str, Any] = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv: Any, **kwargs: Any) -> Any:
+        captured["cwd"] = kwargs["cwd"]
+        return FakeCompleted()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    gw = _gateway(sandbox)
+    gw.invoke("implementer", "run_shell", {"argv": ["git", "status"]})
+    assert captured["cwd"] == str(target.resolve())
+
+
 def test_run_shell_invokes_subprocess_without_shell(
     sandbox: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
