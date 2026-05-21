@@ -201,6 +201,12 @@ def _read_filtered_sources(
         except ToolGatewayError:
             seen[change.file_path] = ("", [])
             continue
+        except (OSError, FileNotFoundError):
+            # File listed in the plan but not on disk yet — the diff
+            # is expected to create it. Mirror the same fallback as
+            # the gateway-rejection branch above.
+            seen[change.file_path] = ("", [])
+            continue
         filtered, hits = filter_fn(raw)
         seen[change.file_path] = (filtered, hits)
     return [(path, content, hits) for path, (content, hits) in seen.items()]
@@ -330,6 +336,12 @@ def _verify_applies_in_scratch(
                 "implementer", "read_file", {"path": rel}
             )
         except ToolGatewayError:
+            continue
+        except (OSError, FileNotFoundError):
+            # File does not exist on disk under target_root yet. The
+            # diff is expected to create it as a pure-addition hunk;
+            # leave the scratch slot empty so ``git apply`` sees an
+            # absent file and creates it cleanly.
             continue
         gateway.invoke(
             "implementer",

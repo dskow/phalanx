@@ -130,6 +130,59 @@ def test_scratch_tree_is_left_in_place_after_apply(
     assert (out / "scratch" / "change.patch").is_file()
 
 
+def test_missing_source_file_does_not_crash_reads(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    """Regression: when a Plan references a file_path that does not
+    exist under target_root (e.g. the planner emitted ``target/app.py``
+    because it misread a repo-rooted path in REQUEST.md), the
+    implementer must not crash inside the gateway's ``read_file``
+    with a bare ``FileNotFoundError``. The read should be treated the
+    same as a gateway rejection: empty content, model can still
+    propose a diff. The downstream ``git apply`` step is the right
+    place for that diff to fail loudly.
+    """
+    gw, _, _, _ = gateway_with_app
+    plan_with_wrong_path = Plan(
+        summary="fix subtraction bug",
+        changes=[
+            Change(
+                # Note the repo-rooted 'target/' prefix — this is the
+                # exact shape the planner emitted when REQUEST.md said
+                # `**Target:** target/app.py`.
+                file_path="target/app.py",
+                rationale="return the sum, not the difference",
+                acceptance_criterion="add(2, 3) == 5",
+            )
+        ],
+    )
+    captured: dict[str, str] = {}
+
+    def stub(prompt: str) -> dict[str, Any]:
+        captured["prompt"] = prompt
+        # Return a diff that the apply step will reject (the model
+        # never saw the source content); the assertion below is on
+        # the ImplementerError category, not on a happy-path apply.
+        return {
+            "diff_text": (
+                "--- a/target/app.py\n"
+                "+++ b/target/app.py\n"
+                "@@ -1,1 +1,1 @@\n"
+                "-x\n+y\n"
+            ),
+            "files_touched": ["target/app.py"],
+        }
+
+    # The crucial assertion: this raises ImplementerError (apply
+    # failure) rather than crashing with FileNotFoundError mid-read.
+    with pytest.raises(ImplementerError) as excinfo:
+        implement(plan_with_wrong_path, gateway=gw, invoke=stub)
+    assert "git apply" in str(excinfo.value)
+    # Confirm the prompt was built — read failure did not abort
+    # source gathering. The file is shown as missing.
+    assert "(file does not yet exist)" in captured["prompt"]
+
+
 # --------------------------------------------------------------------------- #
 # Validation failures
 # --------------------------------------------------------------------------- #
