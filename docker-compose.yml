@@ -30,6 +30,10 @@ services:
     volumes:
       - ./phalanx:/app/phalanx:ro
       - ./tests:/app/tests:ro
+      # target/ is the bundled demo codebase and doubles as a test
+      # fixture (the planted prompt-injection payload is the
+      # input-filter's canonical test case).
+      - ./target:/app/target:ro
     networks:
       - none
     entrypoint: ["pytest"]
