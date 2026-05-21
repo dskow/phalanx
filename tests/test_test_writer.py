@@ -453,3 +453,186 @@ def test_build_prompt_warns_against_repo_root_prefix_in_imports() -> None:
     assert "Import paths" in prompt
     assert "from app import" in prompt
     assert "target/" in prompt  # the named anti-pattern
+
+
+# --------------------------------------------------------------------------- #
+# Pre-existing target files staging
+# --------------------------------------------------------------------------- #
+
+
+def test_existing_target_test_file_is_staged_into_scratch(
+    tmp_path: Path,
+) -> None:
+    """Regression for the bundled-demo failure: target/ contained a
+    real tests/test_app.py with a stub assertion, the model produced
+    a diff modifying that file, and git apply failed because the
+    file wasn't in scratch. The test_writer now stages it first.
+    """
+    target = tmp_path / "target"
+    out = tmp_path / "out"
+    target.mkdir()
+    out.mkdir()
+    (target / "app.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+    tests_dir = target / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tests_dir / "test_app.py").write_text(
+        "from app import add\n\n\ndef test_existing() -> None:\n    assert add(1, 2) == 3\n",
+        encoding="utf-8",
+    )
+    # Pre-stage the implementer's modified app.py (the run state
+    # the test_writer inherits in a real flow).
+    scratch = out / "scratch"
+    scratch.mkdir()
+    (scratch / "app.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+
+    gw = Gateway(GatewayConfig(target_root=target, out_root=out))
+
+    # Model's diff *modifies* the pre-existing tests/test_app.py.
+    test_diff = {
+        "diff_text": (
+            "--- a/tests/test_app.py\n"
+            "+++ b/tests/test_app.py\n"
+            "@@ -1,4 +1,8 @@\n"
+            " from app import add\n"
+            " \n"
+            " \n"
+            " def test_existing() -> None:\n"
+            "     assert add(1, 2) == 3\n"
+            "+\n"
+            "+\n"
+            "+def test_new_coverage() -> None:\n"
+            "+    assert add(2, 3) == 5\n"
+        ),
+        "files_touched": ["tests/test_app.py"],
+        "pytest_exit_code": 0,
+    }
+
+    plan = Plan(
+        summary="add coverage",
+        changes=[
+            Change(
+                file_path="app.py",
+                rationale="r",
+                acceptance_criterion="add(2,3) == 5",
+            )
+        ],
+    )
+    diff = UnifiedDiff(diff_text="placeholder", files_touched=["app.py"])
+
+    artifact = write_tests(plan, diff, gateway=gw, invoke=lambda _p: test_diff)
+
+    assert artifact.pytest_exit_code == 0, (
+        "expected the test diff to apply and pytest to run cleanly"
+    )
+    # Both the pre-existing assertion and the new one survive.
+    post = (scratch / "tests" / "test_app.py").read_text(encoding="utf-8")
+    assert "def test_existing" in post
+    assert "def test_new_coverage" in post
+
+
+def test_pre_existing_target_files_appear_in_prompt(tmp_path: Path) -> None:
+    """The test_writer prompt should surface pre-existing test files
+    so the model can write a diff that modifies them rather than
+    inventing new files in the wrong location."""
+    target = tmp_path / "target"
+    out = tmp_path / "out"
+    target.mkdir()
+    out.mkdir()
+    (target / "app.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    tests_dir = target / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_app.py").write_text(
+        "def test_smoke() -> None:\n    pass\n", encoding="utf-8"
+    )
+    scratch = out / "scratch"
+    scratch.mkdir()
+    (scratch / "app.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+
+    gw = Gateway(GatewayConfig(target_root=target, out_root=out))
+    captured: dict[str, str] = {}
+
+    def stub(prompt: str) -> dict[str, Any]:
+        captured["prompt"] = prompt
+        return {
+            "diff_text": (
+                "--- a/tests/test_app.py\n"
+                "+++ b/tests/test_app.py\n"
+                "@@ -1,2 +1,2 @@\n"
+                "-def test_smoke() -> None:\n"
+                "-    pass\n"
+                "+def test_smoke() -> None:\n"
+                "+    from app import f; assert f() == 2\n"
+            ),
+            "files_touched": ["tests/test_app.py"],
+            "pytest_exit_code": 0,
+        }
+
+    plan = Plan(
+        summary="s",
+        changes=[
+            Change(file_path="app.py", rationale="r", acceptance_criterion="c")
+        ],
+    )
+    diff = UnifiedDiff(diff_text="placeholder", files_touched=["app.py"])
+
+    write_tests(plan, diff, gateway=gw, invoke=stub)
+
+    prompt = captured["prompt"]
+    # The pre-existing test file is visible to the model.
+    assert "## tests/test_app.py" in prompt
+    assert "def test_smoke" in prompt
+
+
+def test_conftest_supports_legacy_target_dot_import(tmp_path: Path) -> None:
+    """Belt-and-suspenders: an existing test file written for the
+    repo-rooted layout (``from target.app import app``) should still
+    work in the scratch tree, thanks to the conftest's ``target``
+    namespace alias."""
+    target = tmp_path / "target"
+    out = tmp_path / "out"
+    target.mkdir()
+    out.mkdir()
+    (target / "app.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+    scratch = out / "scratch"
+    scratch.mkdir()
+    (scratch / "app.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+
+    gw = Gateway(GatewayConfig(target_root=target, out_root=out))
+    response = {
+        "diff_text": (
+            "--- /dev/null\n"
+            "+++ b/tests/test_legacy_import.py\n"
+            "@@ -0,0 +1,4 @@\n"
+            "+from target.app import add\n"
+            "+\n"
+            "+def test_add() -> None:\n"
+            "+    assert add(2, 3) == 5\n"
+        ),
+        "files_touched": ["tests/test_legacy_import.py"],
+        "pytest_exit_code": 0,
+    }
+
+    plan = Plan(
+        summary="s",
+        changes=[
+            Change(
+                file_path="app.py", rationale="r", acceptance_criterion="add(2,3)==5"
+            )
+        ],
+    )
+    diff = UnifiedDiff(diff_text="placeholder", files_touched=["app.py"])
+
+    artifact = write_tests(plan, diff, gateway=gw, invoke=lambda _p: response)
+    assert artifact.pytest_exit_code == 0, (
+        "expected the conftest's ``target`` namespace alias to make "
+        "``from target.app import add`` resolve to scratch/app.py"
+    )

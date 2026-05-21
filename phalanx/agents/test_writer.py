@@ -96,6 +96,14 @@ def write_tests(
     if invoke is None:
         invoke = _default_invoke()
 
+    # Mirror pre-existing target files (test fixtures, conftests, the
+    # initial test_app.py) into the scratch tree before reading sources
+    # or applying the model's diff. Without this, a diff that *modifies*
+    # an existing test file (typical: REQUEST.md says "add tests to
+    # tests/test_app.py") would fail ``git apply`` with "patch does
+    # not apply" because the file the diff references is not on disk.
+    _stage_pre_existing_target_files(gateway)
+
     sources = _read_post_apply_scratch(diff, gateway, filter_fn)
     prompt = _build_prompt(plan, diff, sources)
 
@@ -122,44 +130,114 @@ def write_tests(
 # --------------------------------------------------------------------------- #
 
 
+def _stage_pre_existing_target_files(gateway: Gateway) -> None:
+    """Copy every ``*.py`` file from ``target_root`` into scratch
+    unless it is already there (because the implementer staged a
+    modified version).
+
+    Lets the model write a diff that *modifies* a pre-existing file
+    (e.g. add new test cases to ``tests/test_app.py``) without
+    ``git apply`` failing on a missing source. Preserves the
+    implementer's modifications by skipping any file that already
+    exists in scratch — that file was deliberately placed there
+    with the modernized contents.
+    """
+    target_root = gateway.target_root
+    scratch_root = gateway.out_root / _SCRATCH_SUBDIR
+    if not target_root.is_dir():
+        return
+    for path in sorted(target_root.rglob("*.py")):
+        if not path.is_file():
+            continue
+        try:
+            rel = str(path.relative_to(target_root)).replace("\\", "/")
+        except ValueError:
+            continue
+        scratch_abs = scratch_root / rel
+        if scratch_abs.exists():
+            continue
+        try:
+            content = gateway.invoke(
+                "test_writer", "read_file", {"path": rel}
+            )
+        except (ToolGatewayError, OSError, FileNotFoundError):
+            continue
+        try:
+            gateway.invoke(
+                "test_writer",
+                "write_file",
+                {"path": f"{_SCRATCH_SUBDIR}/{rel}", "content": content},
+            )
+        except (ToolGatewayError, OSError):
+            continue
+
+
 def _read_post_apply_scratch(
     diff: UnifiedDiff,
     gateway: Gateway,
     filter_fn: Callable[[str], tuple[str, list[str]]],
 ) -> list[tuple[str, str, list[str]]]:
-    """Read every file the implementer touched, from the scratch tree
-    where the diff was just applied. Filter each through the input
-    filter before exposing to the model — same posture as the
-    implementer, defense in depth.
+    """Read source content the test_writer needs to see.
 
-    The test_writer reads from scratch, not from target_root. Reading
-    from target_root would show the pre-diff state and the model
-    would write tests against code that has not been modernized.
+    Two layers:
+
+    1. Files the implementer touched, read from the post-apply
+       scratch tree (the modernized version).
+    2. Any other ``*.py`` files now in scratch — typically the
+       pre-existing test files staged by
+       ``_stage_pre_existing_target_files``. The model needs to
+       know these exist so it writes diffs against the right paths
+       (modify existing tests vs. create new files).
+
+    Every file is filtered through ``filter_fn`` before being shown
+    to the model — defense in depth.
     """
     sources: list[tuple[str, str, list[str]]] = []
     seen: set[str] = set()
+    scratch_root = gateway.out_root / _SCRATCH_SUBDIR
+
+    # Layer 1: implementer-touched files first, so they get the
+    # prominent position in the prompt.
     for rel in diff.files_touched:
         if rel in seen:
             continue
         seen.add(rel)
-        # Read paths resolve against target_root by default; the
-        # scratch tree lives under out_root, so we hand the gateway
-        # an absolute path. The gateway still sandbox-checks it.
-        scratch_path = str(gateway.out_root / _SCRATCH_SUBDIR / rel)
+        scratch_path = str(scratch_root / rel)
         try:
             raw = gateway.invoke(
                 "test_writer", "read_file", {"path": scratch_path}
             )
         except ToolGatewayError:
-            # File listed in the diff but not on disk in scratch
-            # (deletion-only diff, or the implementer left things in
-            # a state the gateway cannot read). Skip; the model can
-            # still write tests against the diff_text alone.
             continue
         except (OSError, FileNotFoundError):
             continue
         filtered, hits = filter_fn(raw)
         sources.append((rel, filtered, hits))
+
+    # Layer 2: any other Python files in scratch (existing tests,
+    # conftests, fixtures). Discovery via rglob is direct filesystem
+    # access on the writable sandbox — the content read still routes
+    # through the gateway for the audit trail.
+    if scratch_root.is_dir():
+        for path in sorted(scratch_root.rglob("*.py")):
+            if not path.is_file():
+                continue
+            try:
+                rel = str(path.relative_to(scratch_root)).replace("\\", "/")
+            except ValueError:
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            try:
+                raw = gateway.invoke(
+                    "test_writer", "read_file", {"path": str(path)}
+                )
+            except (ToolGatewayError, OSError, FileNotFoundError):
+                continue
+            filtered, hits = filter_fn(raw)
+            sources.append((rel, filtered, hits))
+
     return sources
 
 
@@ -346,15 +424,28 @@ def _apply_test_diff_to_scratch(
 _CONFTEST_CONTENT = (
     "# Auto-generated by Phalanx test_writer.\n"
     "#\n"
-    "# Puts the scratch tree root on sys.path so tests can import the\n"
-    "# modernized modules by their tree-root-relative paths (e.g.\n"
-    "# ``from app import app``). Without this, pytest's default\n"
-    "# rootdir detection adds the test file's directory to sys.path\n"
-    "# instead, and test collection fails with an ImportError.\n"
+    "# (1) Puts the scratch tree root on sys.path so tests can\n"
+    "# import the modernized modules by their tree-root-relative\n"
+    "# paths (``from app import app``). Without this, pytest's\n"
+    "# default rootdir detection adds the test file's directory to\n"
+    "# sys.path instead, and collection fails with ImportError.\n"
+    "#\n"
+    "# (2) Aliases ``target`` to the scratch tree so pre-existing\n"
+    "# tests written for the repo-rooted layout\n"
+    "# (``from target.app import app``) still resolve. The scratch\n"
+    "# tree is laid out as the target subtree without the repo's\n"
+    "# leading ``target/`` prefix, so this alias is what keeps the\n"
+    "# legacy import shape working.\n"
     "import sys\n"
+    "import types\n"
     "from pathlib import Path\n"
     "\n"
-    "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+    "_scratch_root = Path(__file__).resolve().parent\n"
+    "sys.path.insert(0, str(_scratch_root))\n"
+    "\n"
+    "_target_pkg = types.ModuleType('target')\n"
+    "_target_pkg.__path__ = [str(_scratch_root)]  # namespace-package shape\n"
+    "sys.modules.setdefault('target', _target_pkg)\n"
 )
 
 
