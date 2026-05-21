@@ -144,6 +144,14 @@ class WriteFileArgs(BaseModel):
 class RunShellArgs(BaseModel):
     model_config = {"extra": "forbid"}
     argv: list[str] = Field(min_length=1)
+    cwd: str | None = Field(
+        default=None,
+        description=(
+            "Optional working directory for the command. If unset, the "
+            "gateway uses target_root. If set, the gateway resolves it "
+            "against out_root and rejects any path outside the sandbox."
+        ),
+    )
 
 
 _TOOL_SCHEMAS: Mapping[str, type[BaseModel]] = {
@@ -329,12 +337,24 @@ class Gateway:
                     tool="run_shell",
                     args={"argv": argv},
                 )
+        if args.cwd is None:
+            cwd = self._target
+        else:
+            cwd = self._resolve_in_sandbox(args.cwd, base=self._out, writable=True)
+            if not cwd.is_dir():
+                raise ToolGatewayError(
+                    f"cwd does not exist or is not a directory: {args.cwd!r}",
+                    code="cwd_invalid",
+                    role="?",
+                    tool="run_shell",
+                    args={"argv": argv, "cwd": args.cwd},
+                )
         # shell=False is the load-bearing line. Argv is passed directly
         # to exec(), so there is no shell parser to interpret a stray
         # metachar even if the regex above ever has a gap.
         completed = subprocess.run(
             argv,
-            cwd=str(self._target),
+            cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=_RUN_SHELL_TIMEOUT_SECONDS,

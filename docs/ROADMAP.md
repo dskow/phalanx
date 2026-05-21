@@ -8,14 +8,11 @@ A PR-by-PR build trace. Each entry corresponds to one open or merged PR. Every P
 - [x] **`feat(guardrails): input filter neutralizes prompt-injection patterns`** — regex-based pattern library for instruction-override, role-override, exfiltration, and tool-call-smuggling families; planted payload in `target/app.py` is stripped while surrounding source survives; contract tests cover every family.
 - [x] **`feat(agents): planner produces Pydantic-validated Plan from REQUEST.md`** — first real LLM call, bound to the input filter (planner never sees raw repository content); malformed model response halts with `PlannerError` rather than coercing; wired into the LangGraph state machine as a live node (implementer/test_writer/reviewer remain pass-through stubs until their own PRs); planner emits an `AuditEvent` with input/output hashes on success.
 - [x] **`feat(guardrails): tool gateway with role-based allowlist and path sandbox`** — `Gateway` class with per-role tool allowlist (planner/reviewer read-only; implementer/test_writer can write and run shell), Pydantic-validated tool schemas (`read_file`, `list_files`, `write_file`, `run_shell`), two-zone path sandbox (`target_root` read-only, `out_root` read-write), shell metacharacter denial with executable allowlist (`git`/`pytest`/`ruff`/`mypy`/`semgrep`), audit callback fires on every invocation. "subprocess is imported only by the gateway" is enforced both by ruff per-file ignore and by a static-source test that walks `phalanx/` and fails on any stray import.
+- [x] **`feat(agents): implementer produces unified diff via gateway-mediated writes`** — implementer reads plan-referenced files through the gateway, filters via the input filter, asks the model for a `UnifiedDiff`, validates the response (halts with `ImplementerError` on schema failure), and proves the diff applies by running `git apply` in a scratch tree under `out_root` (halts on non-zero exit). Every read, write, and shell call routes through the gateway. Gateway extended with an optional sandbox-validated `cwd` on `run_shell` so the apply step can execute in scratch. Implementer wired into the LangGraph state machine as a live node; emits an `AuditEvent` with both `input_filter` and `tool_gateway` recorded as passed.
 
 ## Planned (in dependency order)
 
 Each item below maps to one PR that has not been opened yet. The order matters: every PR depends on the contract the previous one established.
-
-- [ ] **`feat(agents): implementer produces unified diff via gateway-mediated writes`**
-  - Implementer agent uses only the tool gateway for file operations.
-  - Output is a `UnifiedDiff` applied to a scratch tree before being inspected.
 
 - [ ] **`feat(guardrails): output validator runs ruff/mypy/semgrep on every diff`**
   - Hard stop on lint/type/SAST failures.
