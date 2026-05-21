@@ -37,10 +37,10 @@ def test_egress_allowlist_is_minimal() -> None:
     assert not is_allowed("github.com")
 
 
-def test_studio_state_validates_request() -> None:
+def test_studio_state_validates_request(tmp_path: Path) -> None:
     state = StudioState(
         request=ModernizationRequest(
-            title="t", body="b", target_root="/tmp/x"
+            title="t", body="b", target_root=str(tmp_path)
         )
     )
     assert state.plan is None
