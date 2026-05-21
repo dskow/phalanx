@@ -69,6 +69,8 @@ class ImplementerError(RuntimeError):
         raw: Any = None,
         validation_error: ValidationError | None = None,
         apply_stderr: str | None = None,
+        apply_stdout: str | None = None,
+        attempted_diff: str | None = None,
         validation_report: ValidationReport | None = None,
         iterations: int | None = None,
     ) -> None:
@@ -76,6 +78,8 @@ class ImplementerError(RuntimeError):
         self.raw = raw
         self.validation_error = validation_error
         self.apply_stderr = apply_stderr
+        self.apply_stdout = apply_stdout
+        self.attempted_diff = attempted_diff
         self.validation_report = validation_report
         self.iterations = iterations
 
@@ -363,11 +367,23 @@ def _verify_applies_in_scratch(
     # the source files visible from cwd. The check is non-mutating
     # against target_root and mutating only inside scratch/, which is
     # under out_root and thus inside the writable sandbox.
+    # --recount and --whitespace=fix make git apply tolerant of the
+    # most common model errors: off-by-one hunk line counts and stray
+    # trailing whitespace. These flags do not relax the *content*
+    # check; a diff that fundamentally does not match the source is
+    # still rejected.
     result = gateway.invoke(
         "implementer",
         "run_shell",
         {
-            "argv": ["git", "apply", "--verbose", _DIFF_FILE],
+            "argv": [
+                "git",
+                "apply",
+                "--verbose",
+                "--recount",
+                "--whitespace=fix",
+                _DIFF_FILE,
+            ],
             "cwd": _SCRATCH_SUBDIR,
         },
     )
@@ -380,6 +396,8 @@ def _verify_applies_in_scratch(
         raise ImplementerError(
             f"git apply failed with exit {result.returncode}",
             apply_stderr=result.stderr,
+            apply_stdout=result.stdout,
+            attempted_diff=diff.diff_text,
         )
 
 

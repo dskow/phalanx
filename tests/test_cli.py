@@ -268,6 +268,58 @@ def test_agent_error_writes_error_artifact(
     assert not (out / "verdict.json").exists()
     err = json.loads((out / "error.json").read_text())
     assert err["error_type"] == "PlannerError"
+    # Diagnostic detail must be present — the validation_error
+    # message tells the operator *why* the schema check failed.
+    assert "validation_error" in err
+    assert "changes" in err["validation_error"]
+
+
+def test_apply_failure_surfaces_git_stderr_in_error_artifact(
+    target_with_request: tuple[Path, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: a real-model run hit ``git apply failed with exit
+    128`` and the operator had no way to see what git actually
+    complained about. The CLI must include ``apply_stderr`` in
+    error.json AND echo it to the terminal, so debugging does not
+    require digging into a JSON file the operator may not even know
+    exists.
+    """
+    target, out = target_with_request
+    # A diff that applies cleanly to the source line numbers but
+    # references a file content that does not match — git apply
+    # rejects this with a clear error on stderr.
+    bad_diff = {
+        "diff_text": (
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-this line is not in the source file\n"
+            "+def replacement(): pass\n"
+        ),
+        "files_touched": ["app.py"],
+    }
+    rc = _cmd_run(
+        target,
+        out,
+        max_iterations=2,
+        planner_invoke=lambda _p: _plan_response(),
+        implementer_invoke=lambda _p: bad_diff,
+        test_writer_invoke=lambda _p: _test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_review(),
+    )
+    assert rc == 1
+    err = json.loads((out / "error.json").read_text())
+    assert err["error_type"] == "ImplementerError"
+    # The crucial fields for debugging an apply failure.
+    assert "apply_stderr" in err
+    assert err["apply_stderr"], "apply_stderr is present but empty"
+    assert "attempted_diff" in err
+    assert "this line is not in the source file" in err["attempted_diff"]
+    # Stderr was also echoed to the terminal for fast triage.
+    captured_err = capsys.readouterr().err
+    assert "ImplementerError" in captured_err
+    assert "apply stderr" in captured_err
 
 
 # --------------------------------------------------------------------------- #
