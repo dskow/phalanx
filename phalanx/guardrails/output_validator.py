@@ -187,11 +187,31 @@ def _argv_for(tool: str, touched: list[str]) -> list[str] | None:
     if tool == "mypy":
         # --ignore-missing-imports + no --strict: the validator must
         # not flag pre-existing target style as the implementer's
-        # failure. We are checking for *new* type errors in the diff.
+        # failure. We are checking for *correctness* errors (wrong
+        # types, undefined names, bad assignments), not enforcing
+        # typing discipline on arbitrary target code.
+        #
+        # --disable-error-code suppresses the "typing discipline"
+        # checks that fire spuriously on real-world code:
+        #
+        #   * untyped-decorator: Flask, Django, Click, FastAPI etc.
+        #     all expose decorators typed as Callable[..., Any];
+        #     mypy then claims the decorated function is "untyped"
+        #     even when the body has annotations. This was the
+        #     exact retry-loop trap on the bundled Flask demo —
+        #     the model added ``-> object:`` to a route, mypy
+        #     escalated to ``untyped-decorator``, and there was no
+        #     fix the model could converge on.
+        #   * no-untyped-def / no-untyped-call: requiring every
+        #     function be fully annotated is a project-level
+        #     decision, not an implementer-correctness gate.
         return [
             "mypy",
             "--ignore-missing-imports",
             "--no-incremental",
+            "--disable-error-code=untyped-decorator",
+            "--disable-error-code=no-untyped-def",
+            "--disable-error-code=no-untyped-call",
             *touched,
         ]
     if tool == "semgrep":
