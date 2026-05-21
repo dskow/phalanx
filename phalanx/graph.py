@@ -24,7 +24,11 @@ from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from phalanx.agents.implementer import ImplementerInvoke, implement
+from phalanx.agents.implementer import (
+    DEFAULT_MAX_ITERATIONS,
+    ImplementerInvoke,
+    implement_iteratively,
+)
 from phalanx.agents.planner import PlannerInvoke, plan
 from phalanx.guardrails.tool_gateway import Gateway
 from phalanx.state import AuditEvent, StudioState
@@ -37,6 +41,7 @@ def build_graph(
     planner_invoke: PlannerInvoke | None = None,
     implementer_invoke: ImplementerInvoke | None = None,
     gateway: Gateway | None = None,
+    max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ) -> CompiledStateGraph:
     """Compile the LangGraph for a Phalanx run.
 
@@ -45,12 +50,14 @@ def build_graph(
     agent's default ChatAnthropic factory. ``gateway`` is the shared
     tool gateway used by the implementer node — ``None`` means a
     real run cannot proceed past the planner; the implementer node
-    raises if invoked without a gateway.
+    raises if invoked without a gateway. ``max_iterations`` bounds the
+    implementer's output-validation retry loop.
     """
     builder: StateGraph = StateGraph(StudioState)
     builder.add_node("planner", _make_planner_node(planner_invoke))
     builder.add_node(
-        "implementer", _make_implementer_node(implementer_invoke, gateway)
+        "implementer",
+        _make_implementer_node(implementer_invoke, gateway, max_iterations),
     )
     builder.add_node("test_writer", _stub_node("test_writer"))
     builder.add_node("reviewer", _stub_node("reviewer"))
@@ -115,6 +122,7 @@ def _make_planner_node(
 def _make_implementer_node(
     invoke: ImplementerInvoke | None,
     gateway: Gateway | None,
+    max_iterations: int,
 ) -> Callable[[StudioState], dict[str, Any]]:
     def implementer_node(state: StudioState) -> dict[str, Any]:
         if state.plan is None:
@@ -130,24 +138,27 @@ def _make_implementer_node(
                 "build_graph(gateway=...) to run past the planner"
             )
         start = time.perf_counter()
-        result = (
-            implement(state.plan, gateway=gateway, invoke=invoke)
-            if invoke is not None
-            else implement(state.plan, gateway=gateway)
-        )
+        kwargs = {"gateway": gateway, "max_iterations": max_iterations}
+        if invoke is not None:
+            kwargs["invoke"] = invoke
+        diff, _report, _attempts = implement_iteratively(state.plan, **kwargs)
         duration_ms = int((time.perf_counter() - start) * 1000)
 
         event = AuditEvent(
             ts=datetime.now(UTC),
             node="implementer",
             input_hash=_sha256(state.plan.model_dump_json()),
-            output_hash=_sha256(result.model_dump_json()),
-            guardrails_passed=["input_filter", "tool_gateway"],
+            output_hash=_sha256(diff.model_dump_json()),
+            guardrails_passed=[
+                "input_filter",
+                "tool_gateway",
+                "output_validator",
+            ],
             guardrails_failed=[],
             duration_ms=duration_ms,
             model="implementer-invoke",
         )
-        return {"diff": result, "audit_log": [*state.audit_log, event]}
+        return {"diff": diff, "audit_log": [*state.audit_log, event]}
 
     return implementer_node
 

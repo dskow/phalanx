@@ -27,6 +27,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from phalanx.guardrails.input_filter import neutralize
+from phalanx.guardrails.output_validator import ValidationReport
+from phalanx.guardrails.output_validator import validate as _validate_default
 from phalanx.guardrails.tool_gateway import (
     Gateway,
     ShellResult,
@@ -35,19 +37,29 @@ from phalanx.guardrails.tool_gateway import (
 from phalanx.state import Plan, UnifiedDiff
 
 ImplementerInvoke = Callable[[str], dict[str, Any] | str]
+Validator = Callable[[UnifiedDiff, Gateway], ValidationReport]
+
+
+def _default_validator(diff: UnifiedDiff, gateway: Gateway) -> ValidationReport:
+    """Adapter so the keyword-only public ``validate`` signature is
+    callable through the positional ``Validator`` protocol."""
+    return _validate_default(diff, gateway=gateway)
 
 _DEFAULT_MODEL = os.environ.get("PHALANX_MODEL", "claude-sonnet-4-6")
 _SCRATCH_SUBDIR = "scratch"
 _DIFF_FILE = "change.patch"
+
+DEFAULT_MAX_ITERATIONS = int(os.environ.get("PHALANX_MAX_ITERATIONS", "4"))
 
 
 class ImplementerError(RuntimeError):
     """Halt the run when the implementer's output cannot be validated
     or does not apply cleanly to the target tree.
 
-    Carries the raw response and, when the failure was a failed
-    ``git apply``, the captured stderr — so the audit log records
-    exactly what went wrong without re-running the agent.
+    Carries the raw response, the chained Pydantic error (for schema
+    failures), the captured stderr (for ``git apply`` failures), and
+    the validation report (for retry-loop exhaustion) — so the audit
+    log records exactly what went wrong without re-running the agent.
     """
 
     def __init__(
@@ -57,11 +69,15 @@ class ImplementerError(RuntimeError):
         raw: Any = None,
         validation_error: ValidationError | None = None,
         apply_stderr: str | None = None,
+        validation_report: ValidationReport | None = None,
+        iterations: int | None = None,
     ) -> None:
         super().__init__(message)
         self.raw = raw
         self.validation_error = validation_error
         self.apply_stderr = apply_stderr
+        self.validation_report = validation_report
+        self.iterations = iterations
 
 
 def implement(
@@ -70,18 +86,26 @@ def implement(
     gateway: Gateway,
     invoke: ImplementerInvoke | None = None,
     filter_fn: Callable[[str], tuple[str, list[str]]] = neutralize,
+    retry_context: str | None = None,
 ) -> UnifiedDiff:
     """Produce a validated, scratch-tree-applied ``UnifiedDiff``.
 
     Raises ``ImplementerError`` on schema-validation failure or
     ``git apply`` failure. The function never returns a diff that
     has not been proven to apply.
+
+    ``retry_context`` is an optional human-readable description of
+    why a previous attempt failed output validation. When provided,
+    it is appended to the prompt so the model can produce a
+    correction. The retry loop itself lives in
+    ``implement_iteratively``; passing the same plan to ``implement``
+    without ``retry_context`` is always a fresh attempt.
     """
     if invoke is None:
         invoke = _default_invoke()
 
     sources = _read_filtered_sources(plan, gateway, filter_fn)
-    prompt = _build_prompt(plan, sources)
+    prompt = _build_prompt(plan, sources, retry_context=retry_context)
 
     raw = invoke(prompt)
     payload = _coerce_to_dict(raw)
@@ -98,6 +122,55 @@ def implement(
 
     _verify_applies_in_scratch(diff, plan, gateway)
     return diff
+
+
+def implement_iteratively(
+    plan: Plan,
+    *,
+    gateway: Gateway,
+    invoke: ImplementerInvoke | None = None,
+    filter_fn: Callable[[str], tuple[str, list[str]]] = neutralize,
+    validator: Validator = _default_validator,
+    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+) -> tuple[UnifiedDiff, ValidationReport, int]:
+    """Drive the implementer-validator loop.
+
+    On each iteration: produce a diff via ``implement``, then run
+    ``validator`` against the resulting scratch tree. If validation
+    passes, return the triple ``(diff, report, attempts)``. If it
+    fails, re-invoke ``implement`` with the failure text appended as
+    ``retry_context``. After ``max_iterations`` failed attempts, raise
+    ``ImplementerError`` with the final report attached.
+
+    Schema-validation failures and ``git apply`` failures are *not*
+    retried — those signal a fundamentally broken response and halt
+    immediately. Only output-validation failures (a diff that applied
+    but tripped a tool check) drive the loop.
+    """
+    if max_iterations < 1:
+        raise ValueError(f"max_iterations must be >= 1, got {max_iterations}")
+
+    retry_context: str | None = None
+    last_report = ValidationReport()
+    for attempt in range(1, max_iterations + 1):
+        diff = implement(
+            plan,
+            gateway=gateway,
+            invoke=invoke,
+            filter_fn=filter_fn,
+            retry_context=retry_context,
+        )
+        last_report = validator(diff, gateway)
+        if last_report.passed:
+            return diff, last_report, attempt
+        retry_context = last_report.failure_context()
+
+    raise ImplementerError(
+        f"output validation failed after {max_iterations} attempt(s); "
+        f"failing tools: {last_report.failing_tools}",
+        validation_report=last_report,
+        iterations=max_iterations,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +212,10 @@ def _read_filtered_sources(
 
 
 def _build_prompt(
-    plan: Plan, sources: list[tuple[str, str, list[str]]]
+    plan: Plan,
+    sources: list[tuple[str, str, list[str]]],
+    *,
+    retry_context: str | None = None,
 ) -> str:
     parts: list[str] = [
         "You are the Phalanx implementer. Produce a unified diff that",
@@ -184,6 +260,16 @@ def _build_prompt(
         parts.append("```")
         parts.append(content if content else "(file does not yet exist)")
         parts.append("```")
+    if retry_context:
+        parts.append("")
+        parts.append("# Previous attempt failed output validation")
+        parts.append(
+            "Your previous diff applied cleanly but failed automated "
+            "checks. Produce a corrected diff that addresses the "
+            "findings below; do not re-introduce the issues you fixed."
+        )
+        parts.append("")
+        parts.append(retry_context)
     return "\n".join(parts)
 
 
