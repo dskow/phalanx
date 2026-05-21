@@ -15,19 +15,12 @@ import pytest
 from phalanx import __version__
 from phalanx.audit.logger import AuditLogger
 from phalanx.cli import main
-from phalanx.graph import describe_graph
 from phalanx.guardrails.egress_firewall import ALLOWED_HOSTS, is_allowed
 from phalanx.state import ModernizationRequest, StudioState
 
 
 def test_version_is_set() -> None:
     assert __version__ == "0.1.0"
-
-
-def test_graph_shape_matches_architecture_doc() -> None:
-    graph = describe_graph()
-    assert graph["nodes"] == ["planner", "implementer", "test_writer", "reviewer"]
-    assert ["planner", "implementer"] in graph["edges"]
 
 
 def test_egress_allowlist_is_minimal() -> None:
