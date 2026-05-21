@@ -353,7 +353,7 @@ def _verify_applies_in_scratch(
             {"path": f"{_SCRATCH_SUBDIR}/{rel}", "content": content},
         )
 
-    # Write the diff next to the scratch tree, not inside it.
+    # Write the full diff for the audit trail.
     gateway.invoke(
         "implementer",
         "write_file",
@@ -363,42 +363,104 @@ def _verify_applies_in_scratch(
         },
     )
 
-    # ``git apply`` is fine outside a git repository — it just needs
-    # the source files visible from cwd. The check is non-mutating
-    # against target_root and mutating only inside scratch/, which is
-    # under out_root and thus inside the writable sandbox.
-    # --recount and --whitespace=fix make git apply tolerant of the
-    # most common model errors: off-by-one hunk line counts and stray
-    # trailing whitespace. These flags do not relax the *content*
-    # check; a diff that fundamentally does not match the source is
-    # still rejected.
-    result = gateway.invoke(
-        "implementer",
-        "run_shell",
-        {
-            "argv": [
-                "git",
-                "apply",
-                "--verbose",
-                "--recount",
-                "--whitespace=fix",
-                _DIFF_FILE,
-            ],
-            "cwd": _SCRATCH_SUBDIR,
-        },
-    )
-    if not isinstance(result, ShellResult):
+    # Split the diff into per-file chunks and apply each separately.
+    # A multi-file diff that combines into one ``git apply`` is
+    # fragile: if any single hunk's line counts are off, git can
+    # consume past the hunk's end and chew into the next file's
+    # ``---`` header. Per-file apply means each chunk's ``--recount``
+    # has nothing downstream to corrupt, and one bad file fails
+    # cleanly without poisoning the rest.
+    chunks = _split_diff_per_file(diff.diff_text)
+    if not chunks:
         raise ImplementerError(
-            f"gateway returned {type(result).__name__} from run_shell, "
-            "expected ShellResult"
-        )
-    if result.returncode != 0:
-        raise ImplementerError(
-            f"git apply failed with exit {result.returncode}",
-            apply_stderr=result.stderr,
-            apply_stdout=result.stdout,
+            "diff_text contains no recognizable file sections",
             attempted_diff=diff.diff_text,
         )
+
+    for index, chunk in enumerate(chunks):
+        chunk_filename = f"chunk_{index:03d}.patch"
+        gateway.invoke(
+            "implementer",
+            "write_file",
+            {
+                "path": f"{_SCRATCH_SUBDIR}/{chunk_filename}",
+                "content": chunk,
+            },
+        )
+        # ``git apply`` is fine outside a git repository — it just
+        # needs the source files visible from cwd. --recount and
+        # --whitespace=fix make it tolerant of the most common model
+        # errors: off-by-one hunk line counts and stray trailing
+        # whitespace. These flags do not relax the *content* check;
+        # a diff that fundamentally does not match the source is
+        # still rejected.
+        result = gateway.invoke(
+            "implementer",
+            "run_shell",
+            {
+                "argv": [
+                    "git",
+                    "apply",
+                    "--verbose",
+                    "--recount",
+                    "--whitespace=fix",
+                    chunk_filename,
+                ],
+                "cwd": _SCRATCH_SUBDIR,
+            },
+        )
+        if not isinstance(result, ShellResult):
+            raise ImplementerError(
+                f"gateway returned {type(result).__name__} from run_shell, "
+                "expected ShellResult"
+            )
+        if result.returncode != 0:
+            raise ImplementerError(
+                f"git apply failed on chunk {index + 1}/{len(chunks)} "
+                f"with exit {result.returncode}",
+                apply_stderr=result.stderr,
+                apply_stdout=result.stdout,
+                attempted_diff=chunk,
+            )
+
+
+def _split_diff_per_file(diff_text: str) -> list[str]:
+    """Split a unified diff into one chunk per file.
+
+    A chunk starts at a ``diff --git`` line or, in its absence, at a
+    ``--- `` (three dashes + space) line — and includes every
+    subsequent line up to but not including the next file boundary.
+    Lines before the first boundary (e.g. a model preamble) are
+    dropped: ``git apply`` does not accept them and they have no
+    semantics in unified diff.
+
+    Returns an empty list for diffs with no recognizable file
+    sections. Returns a single-element list for single-file diffs.
+    """
+    chunks: list[str] = []
+    current: list[str] | None = None
+    has_file_header = False
+    for raw_line in diff_text.splitlines(keepends=True):
+        starts_diff_git = raw_line.startswith("diff --git ")
+        starts_file_header = raw_line.startswith("--- ")
+        is_boundary = starts_diff_git or (
+            starts_file_header and (current is None or has_file_header)
+        )
+        if is_boundary:
+            if current is not None and has_file_header:
+                chunks.append("".join(current))
+            current = [raw_line]
+            has_file_header = starts_file_header
+        else:
+            if current is None:
+                # Skip preamble lines before the first file boundary.
+                continue
+            current.append(raw_line)
+            if starts_file_header:
+                has_file_header = True
+    if current is not None and has_file_header:
+        chunks.append("".join(current))
+    return chunks
 
 
 def _ordered_unique_paths(plan: Plan) -> list[str]:
