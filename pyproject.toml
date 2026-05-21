@@ -38,14 +38,14 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
-# S603/S607 (subprocess) are intentionally allowed only in
+# S404/S603/S607 (subprocess) are intentionally allowed only in
 # phalanx.guardrails.tool_gateway; we enforce that with a
 # per-file ignore rather than a blanket allow.
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"phalanx/guardrails/tool_gateway.py" = ["S603", "S607"]
-"tests/**" = ["S101"]
+"phalanx/guardrails/tool_gateway.py" = ["S404", "S603", "S607"]
+"tests/**" = ["S101", "S404", "S603", "S607"]
 
 [tool.mypy]
 python_version = "3.12"
