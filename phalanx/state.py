@@ -50,6 +50,10 @@ class UnifiedDiff(BaseModel):
 class TestArtifact(BaseModel):
     """The test-writer's output: new or modified tests plus a passing-run assertion."""
 
+    # The "Test" prefix matches pytest's collection pattern but this
+    # is a domain model, not a test case.
+    __test__ = False
+
     diff_text: str
     files_touched: list[str]
     pytest_exit_code: int

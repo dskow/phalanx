@@ -206,6 +206,24 @@ class Gateway:
         self._out = config.out_root.resolve()
         self._audit = audit
 
+    @property
+    def target_root(self) -> Path:
+        """Resolved absolute path of the read-only zone.
+
+        Agents that need to build an absolute path into the writable
+        zone (e.g. the test_writer reading the post-apply scratch
+        tree under ``out_root``) call ``gateway.out_root`` and join
+        from there. Exposing the roots is safe because every path
+        the agent then passes back is still sandbox-checked on the
+        way in.
+        """
+        return self._target
+
+    @property
+    def out_root(self) -> Path:
+        """Resolved absolute path of the read-write zone."""
+        return self._out
+
     # ----- public surface ---------------------------------------------------
 
     def invoke(self, role: str, tool: str, args: Mapping[str, Any]) -> Any:
