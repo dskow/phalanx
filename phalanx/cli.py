@@ -333,18 +333,65 @@ def _emit_error(
     *could not produce* a verdict at all (schema-validation failure,
     git apply failure, unconfigured gateway, etc.). The operator
     needs to know which.
+
+    Any diagnostic attributes the agent attached to its exception
+    (apply_stderr, apply_stdout, attempted_diff, validation_error,
+    validation_report, iterations) are forwarded into ``error.json``
+    and the first few lines of stderr are echoed to the terminal —
+    so the operator does not have to dig into a JSON file to find
+    out *why* git apply failed.
     """
     out.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, Any] = {
         "title": request.title,
         "error_type": type(exc).__name__,
         "message": str(exc),
     }
+
+    for attr in (
+        "apply_stderr",
+        "apply_stdout",
+        "attempted_diff",
+        "iterations",
+    ):
+        value = getattr(exc, attr, None)
+        if value:
+            payload[attr] = value
+    validation_error = getattr(exc, "validation_error", None)
+    if validation_error is not None:
+        payload["validation_error"] = str(validation_error)
+    validation_report = getattr(exc, "validation_report", None)
+    if validation_report is not None:
+        payload["validation_report"] = {
+            "failing_tools": list(validation_report.failing_tools),
+            "failure_context": validation_report.failure_context(),
+        }
+    raw = getattr(exc, "raw", None)
+    if raw is not None:
+        # Truncate to keep error.json reviewable; full response is
+        # available in the audit log via input/output hash if needed.
+        raw_str = str(raw)
+        payload["raw_excerpt"] = (
+            raw_str if len(raw_str) <= 2000 else raw_str[:2000] + "... [truncated]"
+        )
+
     (out / _ERROR_FILENAME).write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
     sys.stderr.write(f"phalanx: {type(exc).__name__}: {exc}\n")
+    apply_stderr = getattr(exc, "apply_stderr", None)
+    if apply_stderr:
+        sys.stderr.write("  apply stderr (first 20 lines):\n")
+        for line in apply_stderr.splitlines()[:20]:
+            sys.stderr.write(f"    {line}\n")
+    apply_stdout = getattr(exc, "apply_stdout", None)
+    if apply_stdout:
+        sys.stderr.write("  apply stdout (first 20 lines):\n")
+        for line in apply_stdout.splitlines()[:20]:
+            sys.stderr.write(f"    {line}\n")
+    sys.stderr.write(f"  full details: {out / _ERROR_FILENAME}\n")
 
 
 def _compose_pr_body(

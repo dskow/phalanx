@@ -67,11 +67,15 @@ class TestWriterError(RuntimeError):
         raw: Any = None,
         validation_error: ValidationError | None = None,
         apply_stderr: str | None = None,
+        apply_stdout: str | None = None,
+        attempted_diff: str | None = None,
     ) -> None:
         super().__init__(message)
         self.raw = raw
         self.validation_error = validation_error
         self.apply_stderr = apply_stderr
+        self.apply_stdout = apply_stdout
+        self.attempted_diff = attempted_diff
 
 
 def write_tests(
@@ -278,11 +282,21 @@ def _apply_test_diff_to_scratch(
             "content": artifact.diff_text,
         },
     )
+    # Same forgiving flags as the implementer — model-generated diffs
+    # often have off-by-one hunk counts that git's strict mode rejects
+    # but ``--recount`` repairs.
     result = gateway.invoke(
         "test_writer",
         "run_shell",
         {
-            "argv": ["git", "apply", "--verbose", _TEST_DIFF_FILE],
+            "argv": [
+                "git",
+                "apply",
+                "--verbose",
+                "--recount",
+                "--whitespace=fix",
+                _TEST_DIFF_FILE,
+            ],
             "cwd": _SCRATCH_SUBDIR,
         },
     )
@@ -295,6 +309,8 @@ def _apply_test_diff_to_scratch(
         raise TestWriterError(
             f"git apply of test diff failed with exit {result.returncode}",
             apply_stderr=result.stderr,
+            apply_stdout=result.stdout,
+            attempted_diff=artifact.diff_text,
         )
 
 
