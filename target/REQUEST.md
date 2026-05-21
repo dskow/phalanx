@@ -1,6 +1,6 @@
 # Modernize the users service for Flask 3 and patch SQL injection
 
-**Target:** `target/app.py`
+**Target file:** `app.py` (path is relative to the target tree root.)
 
 ## What is wrong
 
@@ -14,7 +14,7 @@
 
 - The app imports cleanly under Flask 3 with no `DeprecationWarning` from Flask.
 - `/users?name=<value>` runs as a parameterized query — no string interpolation of user input into SQL.
-- `target/tests/test_app.py` contains at least one test for `/search` that covers an empty and a non-empty query.
+- `tests/test_app.py` contains at least one test for `/search` that covers an empty and a non-empty query.
 - Existing tests still pass.
 
 ## Out of scope

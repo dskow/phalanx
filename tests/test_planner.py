@@ -237,3 +237,24 @@ def test_build_prompt_emits_pure_string() -> None:
     assert isinstance(prompt, str)
     assert "## a.py" in prompt
     assert "code" in prompt
+
+
+def test_build_prompt_warns_against_repo_root_prefix_in_file_paths() -> None:
+    """Regression: a real-model run hit ``FileNotFoundError`` because
+    the planner emitted ``target/app.py`` (the path REQUEST.md used,
+    relative to the repo root) instead of ``app.py`` (the path
+    relative to the target tree root). The prompt must spell out the
+    convention explicitly — that the file_path field follows the
+    ``## header`` paths in the source-tree section, not the prose in
+    the request body."""
+    prompt = _build_prompt(
+        title="T",
+        filtered_body="see target/app.py for the bug",
+        request_hits=[],
+        sources=[("app.py", "code", [])],
+    )
+    # The exact-match rule.
+    assert "file_path MUST exactly match" in prompt
+    assert "## headers" in prompt
+    # The named anti-pattern.
+    assert "target/" in prompt or "target/app.py" in prompt
