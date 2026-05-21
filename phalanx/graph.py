@@ -30,6 +30,7 @@ from phalanx.agents.implementer import (
     implement_iteratively,
 )
 from phalanx.agents.planner import PlannerInvoke, plan
+from phalanx.agents.test_writer import TestWriterInvoke, write_tests
 from phalanx.guardrails.tool_gateway import Gateway
 from phalanx.state import AuditEvent, StudioState
 
@@ -40,18 +41,19 @@ def build_graph(
     *,
     planner_invoke: PlannerInvoke | None = None,
     implementer_invoke: ImplementerInvoke | None = None,
+    test_writer_invoke: TestWriterInvoke | None = None,
     gateway: Gateway | None = None,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ) -> CompiledStateGraph:
     """Compile the LangGraph for a Phalanx run.
 
-    ``planner_invoke`` and ``implementer_invoke`` are the model
-    callables for their respective nodes; ``None`` defers to the
-    agent's default ChatAnthropic factory. ``gateway`` is the shared
-    tool gateway used by the implementer node — ``None`` means a
-    real run cannot proceed past the planner; the implementer node
-    raises if invoked without a gateway. ``max_iterations`` bounds the
-    implementer's output-validation retry loop.
+    The ``*_invoke`` callables are the model handles for their
+    respective nodes; ``None`` defers to the agent's default
+    ChatAnthropic factory. ``gateway`` is the shared tool gateway
+    used by every live node that touches the filesystem — ``None``
+    means a real run cannot proceed past the planner; the live
+    nodes raise if invoked without one. ``max_iterations`` bounds
+    the implementer's output-validation retry loop.
     """
     builder: StateGraph = StateGraph(StudioState)
     builder.add_node("planner", _make_planner_node(planner_invoke))
@@ -59,7 +61,9 @@ def build_graph(
         "implementer",
         _make_implementer_node(implementer_invoke, gateway, max_iterations),
     )
-    builder.add_node("test_writer", _stub_node("test_writer"))
+    builder.add_node(
+        "test_writer", _make_test_writer_node(test_writer_invoke, gateway)
+    )
     builder.add_node("reviewer", _stub_node("reviewer"))
 
     builder.add_edge(START, "planner")
@@ -81,6 +85,7 @@ def describe_graph() -> dict[str, object]:
     graph = build_graph(
         planner_invoke=_describe_only_invoke,
         implementer_invoke=_describe_only_invoke,
+        test_writer_invoke=_describe_only_invoke,
     ).get_graph()
     pseudo = {START, END}
     nodes = [n for n in _NODE_ORDER if n in graph.nodes and n not in pseudo]
@@ -161,6 +166,45 @@ def _make_implementer_node(
         return {"diff": diff, "audit_log": [*state.audit_log, event]}
 
     return implementer_node
+
+
+def _make_test_writer_node(
+    invoke: TestWriterInvoke | None,
+    gateway: Gateway | None,
+) -> Callable[[StudioState], dict[str, Any]]:
+    def test_writer_node(state: StudioState) -> dict[str, Any]:
+        if state.plan is None or state.diff is None:
+            raise RuntimeError(
+                "test_writer node reached without plan+diff — an earlier "
+                "node must have halted; that exception should have "
+                "propagated"
+            )
+        if gateway is None:
+            raise RuntimeError(
+                "test_writer node invoked without a gateway — call "
+                "build_graph(gateway=...) to run past the planner"
+            )
+        start = time.perf_counter()
+        artifact = (
+            write_tests(state.plan, state.diff, gateway=gateway, invoke=invoke)
+            if invoke is not None
+            else write_tests(state.plan, state.diff, gateway=gateway)
+        )
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        event = AuditEvent(
+            ts=datetime.now(UTC),
+            node="test_writer",
+            input_hash=_sha256(state.diff.model_dump_json()),
+            output_hash=_sha256(artifact.model_dump_json()),
+            guardrails_passed=["input_filter", "tool_gateway"],
+            guardrails_failed=[],
+            duration_ms=duration_ms,
+            model="test_writer-invoke",
+        )
+        return {"tests": artifact, "audit_log": [*state.audit_log, event]}
+
+    return test_writer_node
 
 
 def _stub_node(name: str) -> Callable[[StudioState], dict[str, Any]]:

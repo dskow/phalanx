@@ -93,6 +93,25 @@ def test_describe_graph_reads_from_compiled_topology() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _passing_test_writer_stub_response() -> dict[str, Any]:
+    """A trivial test_writer response so the graph can run end-to-end
+    in tests that focus on upstream nodes (planner, implementer)."""
+    return {
+        "diff_text": (
+            "--- /dev/null\n"
+            "+++ b/test_app.py\n"
+            "@@ -0,0 +1,5 @@\n"
+            "+from app import add\n"
+            "+\n"
+            "+\n"
+            "+def test_add() -> None:\n"
+            "+    assert add(2, 3) == 5\n"
+        ),
+        "files_touched": ["test_app.py"],
+        "pytest_exit_code": 0,
+    }
+
+
 def test_graph_runs_through_planner_and_implementer(
     target_and_gateway: tuple[Path, Gateway],
 ) -> None:
@@ -101,6 +120,7 @@ def test_graph_runs_through_planner_and_implementer(
     graph = build_graph(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_stub_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -119,6 +139,7 @@ def test_implementer_appends_audit_event_with_gateway_marker(
     graph = build_graph(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_stub_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -213,20 +234,111 @@ def test_planner_failure_propagates(
         graph.invoke(_initial_state(target))
 
 
-def test_stub_nodes_do_not_mutate_state(
+def _passing_test_writer_response() -> dict[str, Any]:
+    return {
+        "diff_text": (
+            "--- /dev/null\n"
+            "+++ b/test_app.py\n"
+            "@@ -0,0 +1,5 @@\n"
+            "+from app import add\n"
+            "+\n"
+            "+\n"
+            "+def test_add() -> None:\n"
+            "+    assert add(2, 3) == 5\n"
+        ),
+        "files_touched": ["test_app.py"],
+        "pytest_exit_code": 0,
+    }
+
+
+def test_graph_runs_through_test_writer(
     target_and_gateway: tuple[Path, Gateway],
 ) -> None:
     target, gw = target_and_gateway
     graph = build_graph(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        gateway=gw,
+    )
+    final = graph.invoke(_initial_state(target))
+
+    tests = final["tests"] if isinstance(final, dict) else final.tests
+    assert tests is not None
+    assert tests.pytest_exit_code == 0
+
+
+def test_test_writer_appends_audit_event(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    target, gw = target_and_gateway
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        gateway=gw,
+    )
+    final = graph.invoke(_initial_state(target))
+
+    audit_log = (
+        final["audit_log"] if isinstance(final, dict) else final.audit_log
+    )
+    tw_events = [e for e in audit_log if e.node == "test_writer"]
+    assert len(tw_events) == 1
+    event = tw_events[0]
+    assert "tool_gateway" in event.guardrails_passed
+    assert "input_filter" in event.guardrails_passed
+
+
+def test_failing_tests_do_not_halt_the_graph(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    """A non-zero pytest exit code is recorded on the TestArtifact
+    but does NOT halt the graph — the reviewer decides what to do
+    with a failing test run."""
+    target, gw = target_and_gateway
+    failing_response = {
+        "diff_text": (
+            "--- /dev/null\n"
+            "+++ b/test_app.py\n"
+            "@@ -0,0 +1,5 @@\n"
+            "+from app import add\n"
+            "+\n"
+            "+\n"
+            "+def test_add() -> None:\n"
+            "+    assert add(2, 3) == 999\n"
+        ),
+        "files_touched": ["test_app.py"],
+        "pytest_exit_code": 0,
+    }
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: failing_response,
+        gateway=gw,
+    )
+    final = graph.invoke(_initial_state(target))
+
+    tests = final["tests"] if isinstance(final, dict) else final.tests
+    assert tests is not None
+    assert tests.pytest_exit_code != 0
+
+
+def test_reviewer_stub_does_not_mutate_state(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    """Only the reviewer remains a stub now. The graph runs through
+    it without populating ``review``."""
+    target, gw = target_and_gateway
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
 
     if isinstance(final, dict):
-        assert final.get("tests") is None
         assert final.get("review") is None
     else:
-        assert final.tests is None
         assert final.review is None
