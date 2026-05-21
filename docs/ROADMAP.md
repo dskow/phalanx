@@ -6,14 +6,11 @@ A PR-by-PR build trace. Each entry corresponds to one open or merged PR. Every P
 
 - [x] **PR #1 — `chore: initial project scaffold`** — Docker harness, Pydantic state contracts, agent/guardrail stubs, target Flask demo app, smoke tests. ([#1](https://github.com/dskow/phalanx/pull/1))
 - [x] **`feat(guardrails): input filter neutralizes prompt-injection patterns`** — regex-based pattern library for instruction-override, role-override, exfiltration, and tool-call-smuggling families; planted payload in `target/app.py` is stripped while surrounding source survives; contract tests cover every family.
+- [x] **`feat(agents): planner produces Pydantic-validated Plan from REQUEST.md`** — first real LLM call, bound to the input filter (planner never sees raw repository content); malformed model response halts with `PlannerError` rather than coercing; wired into the LangGraph state machine as a live node (implementer/test_writer/reviewer remain pass-through stubs until their own PRs); planner emits an `AuditEvent` with input/output hashes on success.
 
 ## Planned (in dependency order)
 
 Each item below maps to one PR that has not been opened yet. The order matters: every PR depends on the contract the previous one established.
-
-- [ ] **`feat(agents): planner produces Pydantic-validated Plan from REQUEST.md`**
-  - First real LLM call. Bound to the input filter — the planner only ever sees neutralized content.
-  - Contract test: a deliberately-malformed model response halts the run with a structured error, never silently coerces.
 
 - [ ] **`feat(guardrails): tool gateway with role-based allowlist and path sandbox`**
   - Turns "agents do not import subprocess" from a doc claim into an enforced contract.
