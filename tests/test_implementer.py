@@ -28,6 +28,7 @@ import pytest
 from phalanx.agents.implementer import (
     ImplementerError,
     _build_prompt,
+    _split_diff_per_file,
     implement,
     implement_iteratively,
 )
@@ -607,3 +608,172 @@ def test_iterative_rejects_zero_iterations(
             validator=lambda _d, _g: _passing_report(),
             max_iterations=0,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Multi-file diff splitting
+# --------------------------------------------------------------------------- #
+
+
+def test_split_diff_per_file_single_file_round_trips() -> None:
+    diff = (
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        "-x\n"
+        "+y\n"
+    )
+    chunks = _split_diff_per_file(diff)
+    assert chunks == [diff]
+
+
+def test_split_diff_per_file_splits_two_files() -> None:
+    diff = (
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-old\n"
+        "+new\n"
+        "--- /dev/null\n"
+        "+++ b/tests/test_app.py\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+def test_x(): pass\n"
+    )
+    chunks = _split_diff_per_file(diff)
+    assert len(chunks) == 2
+    assert "a/app.py" in chunks[0]
+    assert "tests/test_app.py" not in chunks[0]
+    assert "tests/test_app.py" in chunks[1]
+    assert "a/app.py" not in chunks[1]
+
+
+def test_split_diff_per_file_handles_git_diff_headers() -> None:
+    diff = (
+        "diff --git a/app.py b/app.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-x\n"
+        "+y\n"
+        "diff --git a/b.py b/b.py\n"
+        "--- a/b.py\n"
+        "+++ b/b.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-p\n"
+        "+q\n"
+    )
+    chunks = _split_diff_per_file(diff)
+    assert len(chunks) == 2
+    assert "a/app.py" in chunks[0]
+    assert "a/b.py" not in chunks[0]
+    assert "a/b.py" in chunks[1]
+
+
+def test_split_diff_per_file_drops_preamble() -> None:
+    """Models sometimes prefix a diff with prose like 'Here is the diff:'.
+    The splitter must discard anything before the first file boundary
+    so git apply never sees it."""
+    diff = (
+        "Here is the patch you asked for:\n"
+        "\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-x\n"
+        "+y\n"
+    )
+    chunks = _split_diff_per_file(diff)
+    assert len(chunks) == 1
+    assert "Here is the patch" not in chunks[0]
+
+
+def test_split_diff_per_file_empty_input() -> None:
+    assert _split_diff_per_file("") == []
+
+
+def test_split_diff_per_file_no_recognizable_boundary() -> None:
+    """A blob with no `---` or `diff --git` line is not a unified
+    diff. Returning an empty list lets the caller raise an explicit
+    error rather than feeding garbage to git."""
+    assert _split_diff_per_file("just some prose\nno headers here\n") == []
+
+
+def test_multi_file_diff_applies_when_first_hunk_count_is_wrong(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    """Regression for the real-model demo failure: a two-file diff
+    where the first hunk's @@ count is off by one. Combined into a
+    single ``git apply``, git consumes past the hunk end and into
+    the next file's ``---`` header. Split per-file, each chunk's
+    ``--recount`` has nothing downstream to corrupt and the apply
+    succeeds for both files.
+    """
+    gw, _, out, _ = gateway_with_app
+    # First hunk claims +1,1 but actually adds 2 lines; --recount on
+    # a per-file chunk repairs it. Second file is a pure-addition
+    # test file.
+    diff_text = (
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1,2 +1,1 @@\n"
+        " def add(a, b):\n"
+        "-    return a - b\n"
+        "+    return a + b\n"
+        "--- /dev/null\n"
+        "+++ b/tests/test_add.py\n"
+        "@@ -0,0 +1,4 @@\n"
+        "+from app import add\n"
+        "+\n"
+        "+def test_add() -> None:\n"
+        "+    assert add(2, 3) == 5\n"
+    )
+
+    plan = Plan(
+        summary="fix and test",
+        changes=[
+            Change(
+                file_path="app.py",
+                rationale="fix subtraction",
+                acceptance_criterion="add(2, 3) == 5",
+            ),
+            Change(
+                file_path="tests/test_add.py",
+                rationale="add coverage",
+                acceptance_criterion="test_add passes",
+            ),
+        ],
+    )
+
+    result = implement(
+        plan,
+        gateway=gw,
+        invoke=lambda _p: {
+            "diff_text": diff_text,
+            "files_touched": ["app.py", "tests/test_add.py"],
+        },
+    )
+    assert isinstance(result, UnifiedDiff)
+    # Both files landed in the scratch tree.
+    assert (out / "scratch" / "app.py").is_file()
+    assert (out / "scratch" / "tests" / "test_add.py").is_file()
+
+
+def test_diff_with_no_recognizable_boundary_halts(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    """A response that validates as UnifiedDiff (the model met the
+    Pydantic schema) but whose diff_text contains no file boundary
+    is a malformed diff. Halt with a clear message — do not feed
+    garbage to git apply."""
+    gw, _, _, _ = gateway_with_app
+    with pytest.raises(ImplementerError) as excinfo:
+        implement(
+            _simple_plan(),
+            gateway=gw,
+            invoke=lambda _p: {
+                "diff_text": "this is not a real diff\n",
+                "files_touched": ["app.py"],
+            },
+        )
+    assert "no recognizable file sections" in str(excinfo.value)

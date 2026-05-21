@@ -30,6 +30,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from phalanx.agents.implementer import _split_diff_per_file
 from phalanx.guardrails.input_filter import neutralize
 from phalanx.guardrails.tool_gateway import (
     Gateway,
@@ -274,6 +275,7 @@ def _apply_test_diff_to_scratch(
     will not silently fall back to running pytest against an
     incomplete tree.
     """
+    # Write the full diff for the audit trail.
     gateway.invoke(
         "test_writer",
         "write_file",
@@ -282,36 +284,55 @@ def _apply_test_diff_to_scratch(
             "content": artifact.diff_text,
         },
     )
-    # Same forgiving flags as the implementer — model-generated diffs
-    # often have off-by-one hunk counts that git's strict mode rejects
-    # but ``--recount`` repairs.
-    result = gateway.invoke(
-        "test_writer",
-        "run_shell",
-        {
-            "argv": [
-                "git",
-                "apply",
-                "--verbose",
-                "--recount",
-                "--whitespace=fix",
-                _TEST_DIFF_FILE,
-            ],
-            "cwd": _SCRATCH_SUBDIR,
-        },
-    )
-    if not isinstance(result, ShellResult):
+    # Split per file so a bad hunk count in one file cannot bleed
+    # into the next file's header — same posture as the implementer.
+    chunks = _split_diff_per_file(artifact.diff_text)
+    if not chunks:
         raise TestWriterError(
-            f"gateway returned {type(result).__name__} from run_shell, "
-            "expected ShellResult"
-        )
-    if result.returncode != 0:
-        raise TestWriterError(
-            f"git apply of test diff failed with exit {result.returncode}",
-            apply_stderr=result.stderr,
-            apply_stdout=result.stdout,
+            "diff_text contains no recognizable file sections",
             attempted_diff=artifact.diff_text,
         )
+    for index, chunk in enumerate(chunks):
+        chunk_filename = f"tests_chunk_{index:03d}.patch"
+        gateway.invoke(
+            "test_writer",
+            "write_file",
+            {
+                "path": f"{_SCRATCH_SUBDIR}/{chunk_filename}",
+                "content": chunk,
+            },
+        )
+        # Same forgiving flags as the implementer — model-generated
+        # diffs often have off-by-one hunk counts that git's strict
+        # mode rejects but ``--recount`` repairs.
+        result = gateway.invoke(
+            "test_writer",
+            "run_shell",
+            {
+                "argv": [
+                    "git",
+                    "apply",
+                    "--verbose",
+                    "--recount",
+                    "--whitespace=fix",
+                    chunk_filename,
+                ],
+                "cwd": _SCRATCH_SUBDIR,
+            },
+        )
+        if not isinstance(result, ShellResult):
+            raise TestWriterError(
+                f"gateway returned {type(result).__name__} from run_shell, "
+                "expected ShellResult"
+            )
+        if result.returncode != 0:
+            raise TestWriterError(
+                f"git apply of test diff failed on chunk "
+                f"{index + 1}/{len(chunks)} with exit {result.returncode}",
+                apply_stderr=result.stderr,
+                apply_stdout=result.stdout,
+                attempted_diff=chunk,
+            )
 
 
 def _run_pytest_and_capture_exit(
