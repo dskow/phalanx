@@ -392,3 +392,64 @@ def test_build_prompt_includes_acceptance_criteria_and_applied_diff() -> None:
     assert "--- a/a.py" in prompt
     assert "## a.py" in prompt
     assert "code" in prompt
+
+
+# --------------------------------------------------------------------------- #
+# Conftest + pythonpath setup
+# --------------------------------------------------------------------------- #
+
+
+def test_pytest_can_import_module_from_scratch_root(
+    scratch_with_implementer_output: tuple[
+        Gateway, Path, Path, list[GatewayEvent]
+    ],
+) -> None:
+    """Regression: a test file at scratch/tests/test_app.py needs to
+    be able to ``from app import add`` even though pytest's default
+    rootdir detection would NOT put scratch/ on sys.path. The
+    auto-generated conftest.py at scratch/conftest.py fixes that —
+    without it, pytest fails collection with ImportError and
+    pytest_exit_code is 2 (the demo's exact failure mode).
+    """
+    gw, _, out, _ = scratch_with_implementer_output
+    # Test under a subdirectory imports the module at the scratch
+    # root. This used to fail with exit code 2 (collection error).
+    response = {
+        "diff_text": (
+            "--- /dev/null\n"
+            "+++ b/tests/test_subdir.py\n"
+            "@@ -0,0 +1,5 @@\n"
+            "+from app import add\n"
+            "+\n"
+            "+\n"
+            "+def test_add() -> None:\n"
+            "+    assert add(2, 3) == 5\n"
+        ),
+        "files_touched": ["tests/test_subdir.py"],
+        "pytest_exit_code": 0,
+    }
+    artifact = write_tests(_plan(), _diff(), gateway=gw, invoke=lambda _p: response)
+    assert artifact.pytest_exit_code == 0, (
+        f"pytest failed with exit {artifact.pytest_exit_code} — "
+        "is the auto-generated conftest.py putting scratch on sys.path?"
+    )
+    assert (out / "scratch" / "conftest.py").is_file()
+
+
+def test_build_prompt_warns_against_repo_root_prefix_in_imports() -> None:
+    """Regression: a real-model run produced ``from target.app import
+    app`` because the model inferred the import path from the
+    request body's ``target/app.py`` prose rather than the actual
+    scratch tree layout. The prompt now explicitly names this
+    anti-pattern so the convention can't be silently lost."""
+    plan = Plan(
+        summary="S",
+        changes=[
+            Change(file_path="app.py", rationale="R", acceptance_criterion="C")
+        ],
+    )
+    diff = UnifiedDiff(diff_text="d", files_touched=["app.py"])
+    prompt = _build_prompt(plan, diff, [("app.py", "code", [])])
+    assert "Import paths" in prompt
+    assert "from app import" in prompt
+    assert "target/" in prompt  # the named anti-pattern
