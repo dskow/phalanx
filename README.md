@@ -29,16 +29,25 @@ Everything runs in Docker. The host needs only Docker Desktop.
 
 ```bash
 cp .env.example .env       # then set ANTHROPIC_API_KEY
-docker compose up phalanx-run
+docker compose run --rm phalanx-run \
+    run --target /app/target --out /app/out
 ```
 
 Phalanx will:
 
 1. Read [`target/REQUEST.md`](target/REQUEST.md) (a refactor request expressed as a GitHub issue)
 2. Plan, implement, test, and review the change against [`target/app.py`](target/app.py)
-3. Emit a unified diff, a generated test, a semgrep report, and a structured audit log to `out/`
+3. On a PASS verdict, emit `out/pr_payload.json` — a title/body/diff bundle ready to feed to `gh pr create`
+4. On a FAIL verdict, emit `out/verdict.json` with the failing acceptance criteria and exit non-zero
+5. Either way, emit `out/audit.jsonl` — one structured event per agent decision, replay-able
 
 The bundled target is a small Flask service with three planted issues: a deprecated `@before_first_request` decorator, a SQL-injection vulnerability, and a docstring containing a prompt-injection attempt. The injection is there to demonstrate that the input filter neutralizes it without halting the run.
+
+To verify the Docker harness without making model calls — useful in CI, on a fresh checkout, or for a fork without an API key:
+
+```bash
+docker compose up phalanx-run     # default command is --scaffold
+```
 
 ## Documentation
 

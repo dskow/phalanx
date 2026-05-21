@@ -22,7 +22,21 @@ services:
       - ./out:/app/out
     networks:
       - egress-restricted
-    command: ["run", "--target", "/app/target", "--out", "/app/out"]
+    # The default command is the scaffold-only harness check — it
+    # runs without ANTHROPIC_API_KEY so CI can exercise the Docker
+    # plumbing on every PR. For a real run that drives the agents:
+    #
+    #   docker compose run --rm phalanx-run \
+    #       run --target /app/target --out /app/out
+    #
+    # (export ANTHROPIC_API_KEY first, or set it in a .env file.)
+    command:
+      [
+        "run",
+        "--target", "/app/target",
+        "--out", "/app/out",
+        "--scaffold",
+      ]
 
   phalanx-test:
     build: .

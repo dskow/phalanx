@@ -60,7 +60,7 @@ def test_cli_run_against_scaffold_target(tmp_path: Path) -> None:
     target.mkdir()
     (target / "REQUEST.md").write_text("# Test request\n\nbody", encoding="utf-8")
 
-    rc = main(["run", "--target", str(target), "--out", str(out)])
+    rc = main(["run", "--target", str(target), "--out", str(out), "--scaffold"])
     assert rc == 0
     assert (out / "audit.jsonl").is_file()
 
@@ -74,4 +74,4 @@ def test_cli_run_fails_without_request_file(tmp_path: Path) -> None:
     target.mkdir()
 
     with pytest.raises(FileNotFoundError):
-        main(["run", "--target", str(target), "--out", str(out)])
+        main(["run", "--target", str(target), "--out", str(out), "--scaffold"])
