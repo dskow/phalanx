@@ -4,11 +4,20 @@ Consumes a validated ``Plan`` and emits a ``UnifiedDiff`` that applies
 cleanly to the target tree. Every read, every write, and every shell
 invocation routes through the tool gateway — the implementer module
 itself never touches ``open()``, ``subprocess``, or the filesystem
-directly. The architecture invariant from ``docs/ARCHITECTURE.md``
-("the implementer operates on a guardrail-filtered plan and never
-re-reads the raw legacy file") is enforced here: source content is
-read through the gateway and run through the input filter before
-being shown to the model.
+directly.
+
+Unlike the planner, the implementer reads source content *unfiltered*
+by default. Reason: a unified diff is matched against the real source
+file by ``git apply``, so the context lines in the diff must be the
+ground-truth bytes on disk. If the implementer saw input-filter
+placeholders (``[FILTERED:role-override]``) in a docstring, the model
+would write those placeholders into its diff context, and ``git
+apply`` would then fail to find that text in the actual source. The
+planner already operated on filtered input to decide *what* to
+change; the implementer only writes the diff for those pre-decided
+changes, so its task is bounded by the plan and the downstream
+guardrails (schema validation, output validator, reviewer) catch any
+attempt to act on prompt-injected instructions in the source.
 
 The diff is verified by being applied to a scratch tree under
 ``out_root`` via ``git apply``. The scratch tree is left in place
@@ -26,7 +35,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from phalanx.guardrails.input_filter import neutralize
 from phalanx.guardrails.output_validator import ValidationReport
 from phalanx.guardrails.output_validator import validate as _validate_default
 from phalanx.guardrails.tool_gateway import (
@@ -38,12 +46,25 @@ from phalanx.state import Plan, UnifiedDiff
 
 ImplementerInvoke = Callable[[str], dict[str, Any] | str]
 Validator = Callable[[UnifiedDiff, Gateway], ValidationReport]
+FilterFn = Callable[[str], tuple[str, list[str]]]
 
 
 def _default_validator(diff: UnifiedDiff, gateway: Gateway) -> ValidationReport:
     """Adapter so the keyword-only public ``validate`` signature is
     callable through the positional ``Validator`` protocol."""
     return _validate_default(diff, gateway=gateway)
+
+
+def _passthrough_filter(content: str) -> tuple[str, list[str]]:
+    """The implementer's default source-read filter: pass content
+    through unchanged.
+
+    Diff context must be byte-identical to the source for ``git
+    apply`` to find the hunks. Callers that want to force input
+    filtering (tests, hardened operators) can still pass
+    ``filter_fn=neutralize`` explicitly — see the module docstring
+    for the rationale behind the default."""
+    return content, []
 
 _DEFAULT_MODEL = os.environ.get("PHALANX_MODEL", "claude-sonnet-4-6")
 _SCRATCH_SUBDIR = "scratch"
@@ -89,7 +110,7 @@ def implement(
     *,
     gateway: Gateway,
     invoke: ImplementerInvoke | None = None,
-    filter_fn: Callable[[str], tuple[str, list[str]]] = neutralize,
+    filter_fn: FilterFn = _passthrough_filter,
     retry_context: str | None = None,
 ) -> UnifiedDiff:
     """Produce a validated, scratch-tree-applied ``UnifiedDiff``.
@@ -133,7 +154,7 @@ def implement_iteratively(
     *,
     gateway: Gateway,
     invoke: ImplementerInvoke | None = None,
-    filter_fn: Callable[[str], tuple[str, list[str]]] = neutralize,
+    filter_fn: FilterFn = _passthrough_filter,
     validator: Validator = _default_validator,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ) -> tuple[UnifiedDiff, ValidationReport, int]:
@@ -185,10 +206,16 @@ def implement_iteratively(
 def _read_filtered_sources(
     plan: Plan,
     gateway: Gateway,
-    filter_fn: Callable[[str], tuple[str, list[str]]],
+    filter_fn: FilterFn,
 ) -> list[tuple[str, str, list[str]]]:
-    """Read every plan-referenced file through the gateway and run it
-    through the input filter.
+    """Read every plan-referenced file through the gateway and apply
+    ``filter_fn`` to its content.
+
+    By default ``filter_fn`` is the passthrough — see the module
+    docstring for why the implementer reads unfiltered source. A
+    caller that overrides with ``neutralize`` gets injection
+    placeholders in the model's view, at the cost of breaking
+    diff-context fidelity for files that contain matched patterns.
 
     Files the plan references but that do not yet exist (the change
     adds a new file) are returned with empty content — the diff for

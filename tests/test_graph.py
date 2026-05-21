@@ -153,8 +153,12 @@ def test_implementer_appends_audit_event_with_gateway_marker(
     assert len(implementer_events) == 1
     event = implementer_events[0]
     assert "tool_gateway" in event.guardrails_passed
-    assert "input_filter" in event.guardrails_passed
     assert "output_validator" in event.guardrails_passed
+    # input_filter is intentionally NOT on the implementer's audit —
+    # the implementer reads source unfiltered so git apply can find
+    # diff context. The planner already filtered; that bounds the
+    # implementer's task scope. See implementer module docstring.
+    assert "input_filter" not in event.guardrails_passed
     assert event.guardrails_failed == []
 
 
