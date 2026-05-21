@@ -30,6 +30,7 @@ from phalanx.agents.implementer import (
     implement_iteratively,
 )
 from phalanx.agents.planner import PlannerInvoke, plan
+from phalanx.agents.reviewer import ReviewerInvoke, review
 from phalanx.agents.test_writer import TestWriterInvoke, write_tests
 from phalanx.guardrails.tool_gateway import Gateway
 from phalanx.state import AuditEvent, StudioState
@@ -42,6 +43,7 @@ def build_graph(
     planner_invoke: PlannerInvoke | None = None,
     implementer_invoke: ImplementerInvoke | None = None,
     test_writer_invoke: TestWriterInvoke | None = None,
+    reviewer_invoke: ReviewerInvoke | None = None,
     gateway: Gateway | None = None,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ) -> CompiledStateGraph:
@@ -64,7 +66,9 @@ def build_graph(
     builder.add_node(
         "test_writer", _make_test_writer_node(test_writer_invoke, gateway)
     )
-    builder.add_node("reviewer", _stub_node("reviewer"))
+    builder.add_node(
+        "reviewer", _make_reviewer_node(reviewer_invoke, gateway)
+    )
 
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "implementer")
@@ -86,6 +90,7 @@ def describe_graph() -> dict[str, object]:
         planner_invoke=_describe_only_invoke,
         implementer_invoke=_describe_only_invoke,
         test_writer_invoke=_describe_only_invoke,
+        reviewer_invoke=_describe_only_invoke,
     ).get_graph()
     pseudo = {START, END}
     nodes = [n for n in _NODE_ORDER if n in graph.nodes and n not in pseudo]
@@ -205,6 +210,57 @@ def _make_test_writer_node(
         return {"tests": artifact, "audit_log": [*state.audit_log, event]}
 
     return test_writer_node
+
+
+def _make_reviewer_node(
+    invoke: ReviewerInvoke | None,
+    gateway: Gateway | None,
+) -> Callable[[StudioState], dict[str, Any]]:
+    def reviewer_node(state: StudioState) -> dict[str, Any]:
+        if state.plan is None or state.diff is None or state.tests is None:
+            raise RuntimeError(
+                "reviewer node reached without plan+diff+tests — an "
+                "earlier node must have halted; that exception should "
+                "have propagated"
+            )
+        if gateway is None:
+            raise RuntimeError(
+                "reviewer node invoked without a gateway — call "
+                "build_graph(gateway=...) to run past the planner"
+            )
+        start = time.perf_counter()
+        verdict = (
+            review(
+                state.plan,
+                state.diff,
+                state.tests,
+                gateway=gateway,
+                invoke=invoke,
+            )
+            if invoke is not None
+            else review(
+                state.plan, state.diff, state.tests, gateway=gateway
+            )
+        )
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        # The reviewer's verdict speaks for itself via state.review.
+        # The AuditEvent only records that the reviewer ran and that
+        # its own boundary guardrails passed — the verdict itself is
+        # not a guardrail.
+        event = AuditEvent(
+            ts=datetime.now(UTC),
+            node="reviewer",
+            input_hash=_sha256(state.diff.model_dump_json()),
+            output_hash=_sha256(verdict.model_dump_json()),
+            guardrails_passed=["input_filter", "tool_gateway"],
+            guardrails_failed=[],
+            duration_ms=duration_ms,
+            model="reviewer-invoke",
+        )
+        return {"review": verdict, "audit_log": [*state.audit_log, event]}
+
+    return reviewer_node
 
 
 def _stub_node(name: str) -> Callable[[StudioState], dict[str, Any]]:

@@ -121,6 +121,7 @@ def test_graph_runs_through_planner_and_implementer(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
         test_writer_invoke=lambda _p: _passing_test_writer_stub_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -140,6 +141,7 @@ def test_implementer_appends_audit_event_with_gateway_marker(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
         test_writer_invoke=lambda _p: _passing_test_writer_stub_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -259,6 +261,7 @@ def test_graph_runs_through_test_writer(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
         test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -276,6 +279,7 @@ def test_test_writer_appends_audit_event(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
         test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -315,6 +319,7 @@ def test_failing_tests_do_not_halt_the_graph(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
         test_writer_invoke=lambda _p: failing_response,
+        reviewer_invoke=lambda _p: _fail_reviewer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
@@ -324,21 +329,116 @@ def test_failing_tests_do_not_halt_the_graph(
     assert tests.pytest_exit_code != 0
 
 
-def test_reviewer_stub_does_not_mutate_state(
+def _pass_reviewer_response() -> dict[str, Any]:
+    return {
+        "verdict": "PASS",
+        "criteria": [
+            {
+                "criterion": "add(2,3) == 5",
+                "passed": True,
+                "notes": "implementation correct",
+            }
+        ],
+        "rationale": "criterion met, tests green",
+    }
+
+
+def _fail_reviewer_response() -> dict[str, Any]:
+    return {
+        "verdict": "FAIL",
+        "criteria": [
+            {
+                "criterion": "add(2,3) == 5",
+                "passed": False,
+                "notes": "could not verify",
+            }
+        ],
+        "rationale": "acceptance criterion not met",
+    }
+
+
+def test_full_graph_completes_on_pass_verdict(
     target_and_gateway: tuple[Path, Gateway],
 ) -> None:
-    """Only the reviewer remains a stub now. The graph runs through
-    it without populating ``review``."""
+    """End-to-end: every node is live, planner → implementer →
+    test_writer → reviewer all run, and the final state carries a
+    PASS verdict."""
     target, gw = target_and_gateway
     graph = build_graph(
         planner_invoke=lambda _p: _valid_plan_response(),
         implementer_invoke=lambda _p: _valid_diff_response(),
         test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
         gateway=gw,
     )
     final = graph.invoke(_initial_state(target))
 
-    if isinstance(final, dict):
-        assert final.get("review") is None
-    else:
-        assert final.review is None
+    verdict = final["review"] if isinstance(final, dict) else final.review
+    assert verdict is not None
+    assert verdict.verdict == "PASS"
+
+
+def test_full_graph_completes_on_fail_verdict_without_raising(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    """The reviewer's FAIL is a verdict, not an exception. The graph
+    must run to completion so the CLI can read state.review and
+    decide what to do (skip PR creation, exit non-zero, etc.)."""
+    target, gw = target_and_gateway
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        reviewer_invoke=lambda _p: _fail_reviewer_response(),
+        gateway=gw,
+    )
+    final = graph.invoke(_initial_state(target))
+
+    verdict = final["review"] if isinstance(final, dict) else final.review
+    assert verdict is not None
+    assert verdict.verdict == "FAIL"
+
+
+def test_reviewer_appends_audit_event(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    target, gw = target_and_gateway
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
+        gateway=gw,
+    )
+    final = graph.invoke(_initial_state(target))
+
+    audit_log = (
+        final["audit_log"] if isinstance(final, dict) else final.audit_log
+    )
+    reviewer_events = [e for e in audit_log if e.node == "reviewer"]
+    assert len(reviewer_events) == 1
+    event = reviewer_events[0]
+    assert "tool_gateway" in event.guardrails_passed
+    assert "input_filter" in event.guardrails_passed
+
+
+def test_audit_log_contains_one_event_per_live_node(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    """A complete PASS run produces exactly one audit event for each
+    of the four agents — the audit log is the replay primitive, and
+    it must be neither duplicated nor sparse."""
+    target, gw = target_and_gateway
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: _valid_diff_response(),
+        test_writer_invoke=lambda _p: _passing_test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_reviewer_response(),
+        gateway=gw,
+    )
+    final = graph.invoke(_initial_state(target))
+    audit_log = (
+        final["audit_log"] if isinstance(final, dict) else final.audit_log
+    )
+    nodes = [e.node for e in audit_log]
+    assert nodes == ["planner", "implementer", "test_writer", "reviewer"]
