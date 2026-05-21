@@ -367,3 +367,100 @@ def test_missing_api_key_does_not_block_when_invokes_are_injected(
         reviewer_invoke=lambda _p: _pass_review(),
     )
     assert rc == 0
+
+
+# --------------------------------------------------------------------------- #
+# Scratch isolation across runs
+# --------------------------------------------------------------------------- #
+
+
+def test_scratch_is_wiped_at_run_start(
+    target_with_request: tuple[Path, Path],
+) -> None:
+    """Regression: ``./out:/app/out`` host mounts (typical Docker
+    usage) used to leak state across runs — a previous run that
+    succeeded at the implementer but failed at the test_writer left
+    a half-applied tests/test_app.py in scratch, and the next run's
+    test_writer read stale content for its prompt. Each run must
+    start with a fresh scratch tree.
+    """
+    target, out = target_with_request
+    out.mkdir(parents=True, exist_ok=True)
+    # Plant a leftover file from a previous run.
+    scratch = out / "scratch"
+    scratch.mkdir()
+    (scratch / "stale_from_previous_run.py").write_text(
+        "this file should not survive into the next run\n",
+        encoding="utf-8",
+    )
+    (scratch / "tests").mkdir()
+    (scratch / "tests" / "test_app.py").write_text(
+        "# stale test file with content from a previous run's diff\n",
+        encoding="utf-8",
+    )
+
+    rc = _cmd_run(
+        target,
+        out,
+        max_iterations=2,
+        planner_invoke=lambda _p: _plan_response(),
+        implementer_invoke=lambda _p: _diff_response(),
+        test_writer_invoke=lambda _p: _test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_review(),
+    )
+    assert rc == 0
+
+    # Stale file from the previous run is gone.
+    assert not (scratch / "stale_from_previous_run.py").exists()
+    # The new run's tests/test_app.py is the model's output, not the stale one.
+    new_test_content = (scratch / "test_app.py").read_text(encoding="utf-8")
+    assert "stale test file" not in new_test_content
+
+
+def test_previous_run_deliverables_are_wiped(
+    target_with_request: tuple[Path, Path],
+) -> None:
+    """A previous run's pr_payload.json / verdict.json / error.json /
+    audit.jsonl must not leak into a new run. The audit log is
+    append-only by default, so without explicit wiping a new run's
+    log would be concatenated onto the previous run's content.
+    Similarly a stale verdict.json from a previous FAIL would
+    persist alongside this run's PASS pr_payload.json, which is
+    confusing at best and incorrect at worst.
+    """
+    target, out = target_with_request
+    out.mkdir(parents=True, exist_ok=True)
+    # Plant deliverables and scratch state from a previous run.
+    (out / "audit.jsonl").write_text("previous run log\n", encoding="utf-8")
+    (out / "verdict.json").write_text(
+        '{"verdict": "FAIL", "rationale": "previous run"}\n',
+        encoding="utf-8",
+    )
+    (out / "error.json").write_text(
+        '{"error_type": "PreviousError"}\n', encoding="utf-8"
+    )
+    (out / "scratch").mkdir()
+    (out / "scratch" / "stale.py").write_text("stale\n", encoding="utf-8")
+
+    rc = _cmd_run(
+        target,
+        out,
+        max_iterations=2,
+        planner_invoke=lambda _p: _plan_response(),
+        implementer_invoke=lambda _p: _diff_response(),
+        test_writer_invoke=lambda _p: _test_writer_response(),
+        reviewer_invoke=lambda _p: _pass_review(),
+    )
+    assert rc == 0
+
+    # Scratch wiped.
+    assert not (out / "scratch" / "stale.py").exists()
+    # Stale verdict and error from previous FAIL are gone (this
+    # run is a PASS — keeping them would contradict the PASS
+    # payload that we just wrote).
+    assert not (out / "verdict.json").exists()
+    assert not (out / "error.json").exists()
+    # Audit log was wiped, then rewritten by this run alone.
+    log = (out / "audit.jsonl").read_text(encoding="utf-8")
+    assert "previous run log" not in log
+    assert "planner" in log

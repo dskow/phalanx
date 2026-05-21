@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ _PR_PAYLOAD_FILENAME = "pr_payload.json"
 _VERDICT_FILENAME = "verdict.json"
 _ERROR_FILENAME = "error.json"
 _AUDIT_FILENAME = "audit.jsonl"
+_SCRATCH_DIRNAME = "scratch"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -80,6 +82,43 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _wipe_run_artifacts(out: Path) -> None:
+    """Remove everything a previous run could have written under
+    ``out/`` before the new run starts.
+
+    Two failure modes this prevents:
+
+    1. Scratch tree leakage — the agents' working copy of the
+       target. Files staged for ``git apply``, the diff itself,
+       post-apply state read by the test_writer and reviewer. A
+       previous run that succeeded at the implementer but failed
+       at the test_writer would leave a half-applied
+       tests/test_app.py here, and the next run's test_writer
+       would read the stale content and produce a diff whose
+       context lines do not match the canonical target.
+    2. Deliverable confusion — a previous run's
+       ``pr_payload.json`` / ``verdict.json`` / ``error.json``
+       persisting into a new run that produces a different verdict.
+       The audit log is also append-only by default, so without
+       wiping it the operator gets concatenated runs in one file.
+
+    The operator can archive previous runs themselves between
+    invocations if they want history.
+    """
+    scratch = out / _SCRATCH_DIRNAME
+    if scratch.exists():
+        shutil.rmtree(scratch, ignore_errors=True)
+    for name in (
+        _AUDIT_FILENAME,
+        _PR_PAYLOAD_FILENAME,
+        _VERDICT_FILENAME,
+        _ERROR_FILENAME,
+    ):
+        artifact = out / name
+        if artifact.is_file():
+            artifact.unlink()
 
 
 def _read_request(target: Path) -> ModernizationRequest:
@@ -173,6 +212,14 @@ def _cmd_run(
             "verify the harness without making model calls.\n"
         )
         return EXIT_MISSING_KEY
+
+    # Wipe everything a previous run could have written before the
+    # agents start. Without this, ``./out:/app/out`` host mounts
+    # (typical Docker usage) leak state between runs: stale scratch
+    # poisoning the test_writer's prompt, stale verdict.json or
+    # pr_payload.json contradicting the new verdict, audit log
+    # concatenating across runs.
+    _wipe_run_artifacts(out)
 
     gateway = Gateway(GatewayConfig(target_root=target, out_root=out))
     graph = build_graph(
