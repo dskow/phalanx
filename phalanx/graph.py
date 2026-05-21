@@ -154,16 +154,18 @@ def _make_implementer_node(
         diff, _report, _attempts = implement_iteratively(state.plan, **kwargs)
         duration_ms = int((time.perf_counter() - start) * 1000)
 
+        # The implementer reads source files unfiltered by default so
+        # ``git apply`` finds byte-identical context; input_filter is
+        # not on this node's list of applied guardrails. The planner
+        # still applies input_filter and that is what bounds the
+        # implementer's task — see phalanx/agents/implementer.py
+        # module docstring for the rationale.
         event = AuditEvent(
             ts=datetime.now(UTC),
             node="implementer",
             input_hash=_sha256(state.plan.model_dump_json()),
             output_hash=_sha256(diff.model_dump_json()),
-            guardrails_passed=[
-                "input_filter",
-                "tool_gateway",
-                "output_validator",
-            ],
+            guardrails_passed=["tool_gateway", "output_validator"],
             guardrails_failed=[],
             duration_ms=duration_ms,
             model="implementer-invoke",
