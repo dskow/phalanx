@@ -161,6 +161,56 @@ def test_mypy_catches_type_error(tmp_path: Path) -> None:
     assert "mypy" in report.failure_context().lower()
 
 
+def test_mypy_does_not_flag_untyped_decorator(tmp_path: Path) -> None:
+    """Regression: a Flask route function with a return-type annotation
+    used to trip mypy's ``untyped-decorator`` rule, sending the
+    implementer's retry loop into a non-converging spiral. The
+    validator suppresses that error code so this pattern passes.
+    """
+    target = tmp_path / "target"
+    out = tmp_path / "out"
+    target.mkdir()
+    _make_scratch(
+        out,
+        {
+            "app.py": (
+                "class _App:\n"
+                "    def route(self, path):\n"
+                "        def decorator(fn):\n"
+                "            return fn\n"
+                "        return decorator\n"
+                "\n"
+                "app = _App()\n"
+                "\n"
+                "@app.route('/users')\n"
+                "def get_users() -> object:\n"
+                "    return {}\n"
+            )
+        },
+    )
+    gw = _gateway(target, out)
+    report = validate(_diff(["app.py"]), gateway=gw)
+
+    assert report.passed, report.failure_context()
+    assert "mypy" not in report.failing_tools
+
+
+def test_mypy_does_not_flag_untyped_def(tmp_path: Path) -> None:
+    """A bare untyped function is normal in arbitrary target code.
+    The validator is checking implementer-correctness, not enforcing
+    project-wide typing discipline."""
+    target = tmp_path / "target"
+    out = tmp_path / "out"
+    target.mkdir()
+    _make_scratch(
+        out,
+        {"app.py": "def f(x):\n    return x\n"},
+    )
+    gw = _gateway(target, out)
+    report = validate(_diff(["app.py"]), gateway=gw)
+    assert report.passed, report.failure_context()
+
+
 # --------------------------------------------------------------------------- #
 # Semgrep slot is honest about being deferred
 # --------------------------------------------------------------------------- #
