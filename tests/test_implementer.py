@@ -29,6 +29,11 @@ from phalanx.agents.implementer import (
     ImplementerError,
     _build_prompt,
     implement,
+    implement_iteratively,
+)
+from phalanx.guardrails.output_validator import (
+    ToolResult,
+    ValidationReport,
 )
 from phalanx.guardrails.tool_gateway import (
     Gateway,
@@ -344,3 +349,208 @@ def test_build_prompt_marks_files_not_yet_existing() -> None:
     )
     out = _build_prompt(plan, [("new.py", "", [])])
     assert "(file does not yet exist)" in out
+
+
+def test_build_prompt_includes_retry_context_when_provided() -> None:
+    plan = Plan(
+        summary="S",
+        changes=[
+            Change(file_path="a.py", rationale="R", acceptance_criterion="C")
+        ],
+    )
+    out = _build_prompt(
+        plan,
+        [("a.py", "code", [])],
+        retry_context="# Output validation failed\n## ruff (exit 1)\nF401: unused import",
+    )
+    assert "Previous attempt failed output validation" in out
+    assert "F401" in out
+
+
+# --------------------------------------------------------------------------- #
+# Iterative retry loop
+# --------------------------------------------------------------------------- #
+
+
+def _passing_report() -> ValidationReport:
+    return ValidationReport(
+        tool_results=[ToolResult(name="ruff", executed=True, returncode=0)]
+    )
+
+
+def _failing_report(stderr: str = "F401: unused import") -> ValidationReport:
+    return ValidationReport(
+        tool_results=[
+            ToolResult(
+                name="ruff", executed=True, returncode=1, stderr=stderr
+            )
+        ]
+    )
+
+
+def test_iterative_returns_on_first_pass(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    gw, _, _, _ = gateway_with_app
+    calls: list[str] = []
+
+    def stub(prompt: str) -> dict[str, Any]:
+        calls.append(prompt)
+        return _valid_diff_response()
+
+    diff, report, attempts = implement_iteratively(
+        _simple_plan(),
+        gateway=gw,
+        invoke=stub,
+        validator=lambda _d, _g: _passing_report(),
+        max_iterations=4,
+    )
+    assert isinstance(diff, UnifiedDiff)
+    assert attempts == 1
+    assert report.passed
+    assert len(calls) == 1
+
+
+def test_iterative_re_invokes_with_failure_context(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    """The whole point of the retry loop: when output validation
+    fails, the implementer is called again with the failure text in
+    the prompt. Pin both the call count and the content of the second
+    prompt."""
+    gw, _, _, _ = gateway_with_app
+    calls: list[str] = []
+
+    def stub(prompt: str) -> dict[str, Any]:
+        calls.append(prompt)
+        return _valid_diff_response()
+
+    # Validator fails the first call, passes the second.
+    state = {"calls": 0}
+
+    def validator(_diff: UnifiedDiff, _gw: Gateway) -> ValidationReport:
+        state["calls"] += 1
+        return _failing_report() if state["calls"] == 1 else _passing_report()
+
+    diff, report, attempts = implement_iteratively(
+        _simple_plan(),
+        gateway=gw,
+        invoke=stub,
+        validator=validator,
+        max_iterations=4,
+    )
+    assert attempts == 2
+    assert report.passed
+    assert len(calls) == 2
+    # First call had no retry context.
+    assert "Previous attempt failed" not in calls[0]
+    # Second call did, and includes the failure text the validator emitted.
+    assert "Previous attempt failed" in calls[1]
+    assert "F401" in calls[1]
+
+
+def test_iterative_exhausts_iterations_and_raises(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    gw, _, _, _ = gateway_with_app
+    calls: list[str] = []
+
+    def stub(prompt: str) -> dict[str, Any]:
+        calls.append(prompt)
+        return _valid_diff_response()
+
+    with pytest.raises(ImplementerError) as excinfo:
+        implement_iteratively(
+            _simple_plan(),
+            gateway=gw,
+            invoke=stub,
+            validator=lambda _d, _g: _failing_report(),
+            max_iterations=3,
+        )
+    err = excinfo.value
+    assert err.iterations == 3
+    assert err.validation_report is not None
+    assert "ruff" in err.validation_report.failing_tools
+    assert len(calls) == 3
+
+
+def test_iterative_does_not_retry_on_schema_failure(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    """A malformed model response is a fundamentally broken agent
+    output, not a "valid diff that tripped a check." The retry loop
+    must NOT swallow it as a transient failure to retry against."""
+    gw, _, _, _ = gateway_with_app
+    calls: list[str] = []
+
+    def stub(prompt: str) -> dict[str, Any]:
+        calls.append(prompt)
+        return {"diff_text": "missing files_touched"}
+
+    def validator(_d: UnifiedDiff, _g: Gateway) -> ValidationReport:
+        pytest.fail("validator must not be reached for a schema failure")
+
+    with pytest.raises(ImplementerError) as excinfo:
+        implement_iteratively(
+            _simple_plan(),
+            gateway=gw,
+            invoke=stub,
+            validator=validator,
+            max_iterations=4,
+        )
+    # Halt immediately on schema failure; validation_report is unset.
+    assert excinfo.value.validation_report is None
+    assert excinfo.value.validation_error is not None
+    assert len(calls) == 1
+
+
+def test_iterative_does_not_retry_on_git_apply_failure(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    """``git apply`` failure means the model produced a syntactically
+    valid diff that did not match the actual source — same category
+    as a schema failure, not a retryable output-validation issue."""
+    gw, _, _, _ = gateway_with_app
+    calls: list[str] = []
+
+    def stub(prompt: str) -> dict[str, Any]:
+        calls.append(prompt)
+        return {
+            "diff_text": (
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -1,2 +1,2 @@\n"
+                "-totally bogus\n"
+                "+def add(a, b):\n"
+                "     return a + b\n"
+            ),
+            "files_touched": ["app.py"],
+        }
+
+    def validator(_d: UnifiedDiff, _g: Gateway) -> ValidationReport:
+        pytest.fail("validator must not be reached when git apply fails")
+
+    with pytest.raises(ImplementerError) as excinfo:
+        implement_iteratively(
+            _simple_plan(),
+            gateway=gw,
+            invoke=stub,
+            validator=validator,
+            max_iterations=4,
+        )
+    assert excinfo.value.apply_stderr is not None
+    assert len(calls) == 1
+
+
+def test_iterative_rejects_zero_iterations(
+    gateway_with_app: tuple[Gateway, Path, Path, list[GatewayEvent]],
+) -> None:
+    gw, _, _, _ = gateway_with_app
+    with pytest.raises(ValueError, match=">= 1"):
+        implement_iteratively(
+            _simple_plan(),
+            gateway=gw,
+            invoke=lambda _p: _valid_diff_response(),
+            validator=lambda _d, _g: _passing_report(),
+            max_iterations=0,
+        )

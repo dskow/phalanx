@@ -131,7 +131,42 @@ def test_implementer_appends_audit_event_with_gateway_marker(
     event = implementer_events[0]
     assert "tool_gateway" in event.guardrails_passed
     assert "input_filter" in event.guardrails_passed
+    assert "output_validator" in event.guardrails_passed
     assert event.guardrails_failed == []
+
+
+def test_implementer_node_halts_when_validation_exhausted(
+    target_and_gateway: tuple[Path, Gateway],
+) -> None:
+    """If the model produces a diff that keeps tripping output
+    validation, the retry loop exhausts and the graph halts. We
+    simulate this by returning a diff that ruff will flag (unused
+    import) and capping iterations at 2."""
+    target, gw = target_and_gateway
+    lint_failing_diff = {
+        "diff_text": (
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1,2 +1,2 @@\n"
+            "-def add(a, b):\n"
+            "-    return a - b\n"
+            "+import os\n"
+            "+def add(a, b):\n"
+            "+    return a + b\n"
+        ),
+        "files_touched": ["app.py"],
+    }
+    graph = build_graph(
+        planner_invoke=lambda _p: _valid_plan_response(),
+        implementer_invoke=lambda _p: lint_failing_diff,
+        gateway=gw,
+        max_iterations=2,
+    )
+    with pytest.raises(ImplementerError) as excinfo:
+        graph.invoke(_initial_state(target))
+    assert excinfo.value.iterations == 2
+    assert excinfo.value.validation_report is not None
+    assert "ruff" in excinfo.value.validation_report.failing_tools
 
 
 def test_implementer_node_halts_without_gateway(
