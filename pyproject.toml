@@ -10,14 +10,14 @@ authors = [
 ]
 dependencies = [
     "langgraph>=1.2.7",
-    "langchain-anthropic>=1.4.6",
+    "langchain-anthropic>=1.4.8",
     "anthropic>=0.116.0",
     "pydantic>=2.13.4",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.1.0",
+    "pytest>=9.1.1",
     "ruff>=0.15.20",
     "mypy>=2.1.0",
 ]
