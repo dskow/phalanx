@@ -10,7 +10,7 @@ authors = [
 ]
 dependencies = [
     "langgraph>=1.2.10",
-    "langchain-anthropic>=1.4.8",
+    "langchain-anthropic>=1.5.4",
     "anthropic>=0.116.0",
     "pydantic>=2.13.4",
 ]
