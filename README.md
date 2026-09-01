@@ -3,9 +3,9 @@
 [![CI](https://github.com/dskow/phalanx/actions/workflows/ci.yml/badge.svg)](https://github.com/dskow/phalanx/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> *phalanx, n. — a disciplined infantry formation in which each soldier's shield protects the one to their left. The formation is the defense; no soldier stands alone.*
+> *phalanx, n. a disciplined infantry formation in which each soldier's shield protects the one to their left. The formation is the defense; no soldier stands alone.*
 
-Phalanx is a reference implementation of an **autonomous code-modernization studio**: a multi-agent system that takes a refactor request as input and produces a reviewed, tested, security-scanned pull request as output — under a deterministic guardrail layer that keeps autonomous code generation safe enough for production use.
+Phalanx is a reference implementation of an **autonomous code-modernization studio**: a multi-agent system that takes a refactor request as input and produces a reviewed, tested, security-scanned pull request as output. It happens under a deterministic guardrail layer that keeps autonomous code generation safe enough for production use.
 
 It exists to make three architectural claims visible, runnable, and testable.
 
@@ -17,11 +17,11 @@ Autonomous agents can produce predictable, structurally-sound code if the orches
 
 ### 2. Security at scale
 
-Enterprises will not deploy autonomous coding agents until they can prove the agent cannot exfiltrate data, execute arbitrary code, or be hijacked by a prompt-injected docstring in the codebase it is modernizing. Phalanx embeds a runtime guardrail layer — input filter, tool allowlist gateway, egress firewall, SAST output validator — between the agent loop and any side-effectful operation. The guardrails run in the orchestrator, not in agent context, so a prompt cannot disable them.
+Enterprises will not deploy autonomous coding agents until they can prove the agent cannot exfiltrate data, execute arbitrary code, or be hijacked by a prompt-injected docstring in the codebase it is modernizing. Phalanx embeds a runtime guardrail layer. This includes: input filter, tool allowlist gateway, egress firewall, SAST output validator. It is between the agent loop and any side-effectful operation. The guardrails run in the orchestrator, not in agent context, so a prompt cannot disable them.
 
 ### 3. Systemic friction removal
 
-The entire flow from a refactor request to a merge-ready PR runs in a single container in minutes, including test generation and security review. The point is not that an LLM writes the code — the point is that the surrounding system is disciplined enough to ship that code without a human gating every step.
+The entire flow from a refactor request to a merge-ready PR runs in a single container in minutes, including test generation and security review. The surrounding system is disciplined enough to ship that code without a human gating every step.
 
 ## Demo
 
@@ -37,13 +37,13 @@ Phalanx will:
 
 1. Read [`target/REQUEST.md`](target/REQUEST.md) (a refactor request expressed as a GitHub issue)
 2. Plan, implement, test, and review the change against [`target/app.py`](target/app.py)
-3. On a PASS verdict, emit `out/pr_payload.json` — a title/body/diff bundle ready to feed to `gh pr create`
+3. On a PASS verdict, emit `out/pr_payload.json`: a title/body/diff bundle ready to feed to `gh pr create`
 4. On a FAIL verdict, emit `out/verdict.json` with the failing acceptance criteria and exit non-zero
 5. Either way, emit `out/audit.jsonl` — one structured event per agent decision, replay-able
 
 The bundled target is a small Flask service with three planted issues: a deprecated `@before_first_request` decorator, a SQL-injection vulnerability, and a docstring containing a prompt-injection attempt. The injection is there to demonstrate that the input filter neutralizes it without halting the run.
 
-To verify the Docker harness without making model calls — useful in CI, on a fresh checkout, or for a fork without an API key:
+To verify the Docker harness without making model calls on a fresh checkout or for a fork without an API key:
 
 ```bash
 docker compose up phalanx-run     # default command is --scaffold
@@ -51,13 +51,13 @@ docker compose up phalanx-run     # default command is --scaffold
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — agent state machine and contract schemas
-- [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md) — runtime security layer specification and threat model
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — PR-by-PR build trace, what is done and what is planned
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): agent state machine and contract schemas
+- [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md): runtime security layer specification and threat model
+- [`docs/ROADMAP.md`](docs/ROADMAP.md): PR-by-PR build trace, what is done and what is planned
 
 ## Status
 
-This is an actively-developed reference implementation. The initial scaffold establishes the project shape, the Docker harness, and the target codebase. Agents and guardrails land in successive PRs — each one a single reviewable unit with its own contract tests. CI builds the image and runs the smoke suite on every PR; Dependabot watches pip, Docker, and GitHub Actions for drift.
+This is an actively-developed reference implementation. The initial scaffold establishes the project shape, the Docker harness, and the target codebase. Agents and guardrails land in successive PRs. Each PR is a single reviewable unit with its own contract tests. CI builds the image and runs the smoke suite on every PR. Dependabot watches pip, Docker, and GitHub Actions for drift.
 
 See [open PRs](https://github.com/dskow/phalanx/pulls), the [PR-history changelog](https://github.com/dskow/phalanx/pulls?q=is%3Apr+is%3Aclosed), and [the roadmap](docs/ROADMAP.md) for the build trace.
 
