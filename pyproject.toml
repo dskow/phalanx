@@ -9,7 +9,7 @@ authors = [
     { name = "David Skowronski", email = "david@dskow.com" }
 ]
 dependencies = [
-    "langgraph>=1.2.10",
+    "langgraph>=1.2.11",
     "langchain-anthropic>=1.7.0",
     "anthropic>=0.122.0",
     "pydantic>=2.13.4",
