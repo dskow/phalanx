@@ -14,7 +14,7 @@ WORKDIR /app
 # firewall is the primary control, but reducing the attack surface
 # inside the container is good hygiene.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git \
+ && apt-get install -y --no-install-recommends build-essential gcc git \
  && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
